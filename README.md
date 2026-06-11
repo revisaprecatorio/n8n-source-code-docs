@@ -24,59 +24,46 @@ Documentação detalhada de todos os workflows ativos no n8n. Os JSONs exportado
 ## Fluxo Completo da Plataforma
 
 ```mermaid
-flowchart LR
-    subgraph PRINCIPAL["Fluxo do Cliente"]
-        direction TB
-        WA(["Cliente\nWhatsApp"])
-        CW["1. Chatbot Revisa\nwebhook/chatbot"]
-        MP["2. Mercado Pago\nwebhook/generate-payment-link\nwebhook/mercadopago-notification"]
-        DB[("consultas_esaj\nPAYMENT_APPROVED")]
-        CR["Crawler TJSP\nSelenium + Chrome"]
-        OCR["pipeline_completo.sh\nOCR + Ingestão + Cálculo"]
-        LE["3. Laudo envio email+cpf\nwebhook/reporte-email-cpf"]
-        EMAIL(["Email ao cliente\nFINAL_REPORT_SENT"])
-        PARCIAL(["Email Revisa + WA\nPARTIAL_REPORT_SENT"])
+flowchart TD
+    %% Fluxo principal — definido primeiro, ocupa centro/esquerda
+    WA([Cliente WhatsApp])
+    CW[1. Chatbot Revisa\nwebhook/chatbot]
+    MP[2. Mercado Pago Unified\nwebhook/generate-payment-link\nwebhook/mercadopago-notification]
+    DB[(consultas_esaj\nPAYMENT_APPROVED)]
+    CR[Crawler TJSP\nSelenium + Chrome]
+    OCR[pipeline_completo.sh\nOCR + Ingestão + Cálculo]
+    LE[3. Laudo envio email+cpf\nwebhook/reporte-email-cpf]
+    EMAIL([Email ao cliente\nFINAL_REPORT_SENT])
+    PARCIAL([Email Revisa + WA\nPARTIAL_REPORT_SENT])
 
-        WA -->|CPF| CW
-        CW <-->|"email + confirmação"| WA
-        CW -->|"trigger_payment=true"| MP
-        MP -->|"link de pagamento"| WA
-        WA -->|paga| MP
-        MP -->|"PAYMENT_APPROVED\n+ DELETE OCR antigo"| DB
-        DB -->|"watchdog"| CR
-        CR -->|"PDFs baixados"| OCR
-        OCR -->|"POST /reporte-email-cpf"| LE
-        OCR -->|"100% rejeitados — Etapa 9b"| LE
-        LE -->|"todos_processados=true"| EMAIL
-        LE -->|"todos_processados=false"| PARCIAL
-    end
+    WA -->|CPF| CW
+    CW -->|email + confirmação| WA
+    CW -->|trigger_payment=true| MP
+    MP -->|link de pagamento| WA
+    WA -->|paga| MP
+    MP -->|PAYMENT_APPROVED\n+ DELETE OCR antigo| DB
+    DB -->|watchdog| CR
+    CR -->|PDFs baixados| OCR
+    OCR -->|POST /reporte-email-cpf| LE
+    OCR -->|100% rejeitados — Etapa 9b| LE
+    LE -->|todos_processados=true| EMAIL
+    LE -->|todos_processados=false| PARCIAL
 
-    subgraph LATERAL["Admin e Monitoramento"]
-        direction TB
-        ADMIN(["Admin / Sistema"])
-        BP["4. CPF_batch_processing\nwebhook/cpf-batch-processing"]
-        ADMIN -->|"POST cpf"| BP
+    %% Admin batch — definido segundo, ocupa centro
+    ADMIN([Admin / Sistema])
+    BP[4. CPF_batch_processing\nwebhook/cpf-batch-processing]
+    ADMIN -->|POST cpf| BP
+    BP -->|PAYMENT_APPROVED direto| DB
 
-        SCHED(["Schedule 10min"])
-        AG["5. Alertas\nERROS_GRAVES\nLaudo_Parcial\nReporte_Manual"]
-        NOTIF(["WA + Email\ncliente + equipe"])
-        SCHED --> AG
-        AG --> NOTIF
-    end
+    %% Monitoramento — definido por último → Dagre posiciona à direita
+    SCHED([Schedule 10min])
+    AG[5. Alertas\nERROS_GRAVES\nLaudo_Parcial\nReporte_Manual]
+    NOTIF([WA + Email\ncliente + equipe])
+    SCHED --> AG --> NOTIF
 
-    BP -->|"PAYMENT_APPROVED direto"| DB
-
-    classDef verde fill:#1a7f37,color:#fff,stroke:#1a7f37
-    classDef azul fill:#0969da,color:#fff,stroke:#0969da
-    classDef laranja fill:#bc4c00,color:#fff,stroke:#bc4c00
-    classDef cinza fill:#57606a,color:#fff,stroke:#57606a
-    classDef roxo fill:#6639ba,color:#fff,stroke:#6639ba
-
-    class WA,ADMIN verde
-    class EMAIL,MP azul
-    class PARCIAL laranja
-    class SCHED,NOTIF cinza
-    class OCR roxo
+    style WA fill:#238636,color:#fff
+    style EMAIL fill:#1f6feb,color:#fff
+    style PARCIAL fill:#d29922,color:#000
 ```
 
 ---
