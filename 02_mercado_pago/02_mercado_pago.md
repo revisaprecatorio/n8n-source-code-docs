@@ -45,29 +45,44 @@
 
 ## Flowchart
 
+### Fluxo A — Geração de Link
+
 ```mermaid
 flowchart TD
-    subgraph A["Fluxo A — Geração de Link"]
-        WH1([POST\n/generate-payment-link]) --> VT{Validate\ntrigger_payment=true\n+ email?}
-        VT -->|Não| SK[Log Skipped]
-        VT -->|Sim| GL[Generate Payment Link\nPOST MP API\n/checkout/preferences\nR$ 1,00]
-        GL --> SL[(Save Payment Link\nconsultas_esaj\nmp_preference_id\nAWAITING_PAYMENT)]
-        SL --> PT1[(PT Link Gerado\nprocess_tracking\nLINK_GERADO)]
-        PT1 --> CL[(Cleanup Session\nDELETE cpf=00000000000)]
-        CL --> WA1[Send Payment Link WA\n🔗 link ao cliente]
-    end
+    WH1([POST\n/generate-payment-link]) --> VT{Validate\ntrigger_payment=true\n+ email?}
+    VT -->|Não| SK[Log Skipped]
+    VT -->|Sim| GL[Generate Payment Link\nPOST MP API\nR$ 1,00]
+    GL --> SL[(Save Payment Link\nconsultas_esaj\nmp_preference_id\nAWAITING_PAYMENT)]
+    SL --> PT1[(PT Link Gerado\nprocess_tracking\nLINK_GERADO)]
+    PT1 --> CL[(Cleanup Session\nDELETE cpf=00000000000)]
+    CL --> WA1[Send Payment Link WA\nlink ao cliente]
 
-    subgraph B["Fluxo B — Notificação de Pagamento"]
-        WH2([POST\n/mercadopago-notification]) --> RES[Respond OK 200\nimediato]
-        WH2 --> FP{Filter\ntype=payment?}
-        FP -->|Não| IGN[Log Ignored]
-        FP -->|Sim| GPD[Get Payment Details\nGET /v1/payments/id]
-        GPD --> PPS[Process Payment Status\napproved → PAYMENT_APPROVED\nrejected → PAYMENT_REJECTED\npending → PAYMENT_PENDING]
-        PPS --> UPS[(Update Payment Status\nconsultas_esaj\ncurrent_state + mp_payment_id)]
-        UPS --> PTP[(PT Status Pagamento\nprocess_tracking)]
-        PTP --> WA2[Send WhatsApp\nNotification]
-        WA2 --> LPS[(Log Payment Success\nlogs INSERT\n+ DELETE esaj_detalhe_processos\n+ DELETE esaj_calc_precatorio_resumo)]
-    end
+    classDef entrada fill:#238636,color:#fff,stroke:#2ea043
+    classDef wf      fill:#1f6feb,color:#fff,stroke:#388bfd
+    classDef banco   fill:#0d419d,color:#fff,stroke:#1f6feb
+    classDef cinza   fill:#57606a,color:#fff,stroke:#6e7781
+    classDef decisao fill:#bf8700,color:#fff,stroke:#d29922
+
+    class WH1,WA1 entrada
+    class VT decisao
+    class SK cinza
+    class GL wf
+    class SL,PT1,CL banco
+```
+
+### Fluxo B — Notificação de Pagamento
+
+```mermaid
+flowchart TD
+    WH2([POST\n/mercadopago-notification]) --> RES[Respond OK 200\nimediato]
+    WH2 --> FP{Filter\ntype=payment?}
+    FP -->|Não| IGN[Log Ignored]
+    FP -->|Sim| GPD[Get Payment Details\nGET /v1/payments/id]
+    GPD --> PPS[Process Payment Status\napproved → PAYMENT_APPROVED\nrejected → PAYMENT_REJECTED\npending → PAYMENT_PENDING]
+    PPS --> UPS[(Update Payment Status\nconsultas_esaj\ncurrent_state + mp_payment_id)]
+    UPS --> PTP[(PT Status Pagamento\nprocess_tracking)]
+    PTP --> WA2[Send WhatsApp\nNotification]
+    WA2 --> LPS[(Log Payment Success\nlogs INSERT\n+ DELETE OCR antigos)]
 
     classDef entrada fill:#238636,color:#fff,stroke:#2ea043
     classDef wf      fill:#1f6feb,color:#fff,stroke:#388bfd
@@ -77,12 +92,12 @@ flowchart TD
     classDef cinza   fill:#57606a,color:#fff,stroke:#6e7781
     classDef decisao fill:#bf8700,color:#fff,stroke:#d29922
 
-    class WH1,WH2,WA1,WA2 entrada
-    class VT,FP decisao
+    class WH2,WA2 entrada
+    class FP decisao
     class RES sucesso
-    class SK,IGN cinza
-    class GL,GPD,PPS wf
-    class SL,PT1,CL,UPS,PTP banco
+    class IGN cinza
+    class GPD,PPS wf
+    class UPS,PTP banco
     class LPS alerta
 ```
 
@@ -108,7 +123,7 @@ sequenceDiagram
     WF->>DB: DELETE consultas_esaj WHERE cpf=00000000000
     WF->>CLI: WhatsApp "🔗 Link de pagamento: {init_point}"
 
-    Note over MP,WF: Cliente realiza pagamento no app/site MP
+    %% Cliente realiza pagamento no app/site MP
 
     MP->>WF: POST /mercadopago-notification\n{ type: "payment", data.id: 12345 }
     WF-->>MP: 200 OK (imediato — evita retry)

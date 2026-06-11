@@ -63,8 +63,7 @@ sequenceDiagram
     WF->>DB: INSERT ... ON CONFLICT DO UPDATE\ncurrent_state=PAYMENT_APPROVED\nmp_payment_status=approved\nmp_payment_id=BATCH_{epoch}
     DB-->>WF: id, cpf, nome_requerente, total_processos
     WF-->>Admin: 200 { success: true, cpf, nome, processos }
-
-    Note over DB: Watchdog detecta PAYMENT_APPROVED<br/>→ Crawler inicia download dos PDFs
+    %% Watchdog detecta PAYMENT_APPROVED → Crawler inicia download dos PDFs
 ```
 
 ---
