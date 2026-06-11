@@ -44,11 +44,11 @@
 
 ```mermaid
 flowchart TD
-    WH([POST /reporte-email-cpf\n{ cpf, email }]) --> CPC[(Check Processamento Completo\nvw_precatorios_full\n+ esaj_calc_precatorio_resumo\n+ rejeitado=true conta como Processado)]
+    WH([POST /reporte-email-cpf\ncpf + email]) --> CPC[(Check Processamento Completo\nvw_precatorios_full\nesaj_calc_precatorio_resumo\nrejeitado=true conta como Processado)]
     CPC --> TP{Todos\nProcessados?}
 
     TP -->|true| FD[(Fetch Data for CPF\nvw_precatorios_full)]
-    FD --> BH[Build HTML Content\nlaudo completo\nvalores, processos, indicadores]
+    FD --> BH[Build HTML Content\nlaudo completo\nvalores + processos]
     BH --> SE[Send Report Email\nao cliente + cc:revisa]
     SE --> LS[(Log Success\nlogs INSERT)]
     LS --> WR[Webhook Response 200]
@@ -59,16 +59,25 @@ flowchart TD
     FDP --> BHP[Build HTML Parcial]
     BHP --> SR[Send Report Revisa\nemail interno equipe]
     SR --> PN[phone e nome\nextrai whatsapp]
-    PN --> WP[Whatsapp Parcial\n7 dias úteis]
+    PN --> WP[Whatsapp Parcial\n7 dias uteis]
     WP --> LP[(Log Parcial e Manual\nlogs INSERT)]
     LP --> WRP[Webhook Response Parcial 200]
     WRP --> UPR[(Update Partial Report\nPARTIAL_REPORT_SENT)]
     UPR --> PT2[(PT Report Parcial\nprocess_tracking\nLAUDO_PARCIAL)]
 
-    style TP fill:#FF9800,color:#fff
-    style PT1 fill:#1565C0,color:#fff
-    style PT2 fill:#E65100,color:#fff
-    style WP fill:#25D366,color:#fff
+    classDef entrada fill:#238636,color:#fff,stroke:#2ea043
+    classDef wf      fill:#1f6feb,color:#fff,stroke:#388bfd
+    classDef banco   fill:#0d419d,color:#fff,stroke:#1f6feb
+    classDef parcial fill:#d29922,color:#000,stroke:#e3b341
+    classDef cinza   fill:#57606a,color:#fff,stroke:#6e7781
+    classDef decisao fill:#bf8700,color:#fff,stroke:#d29922
+
+    class WH,WP entrada
+    class TP decisao
+    class CPC,FD,FDP,LS,LP,UR,UPR,PT1,PT2 banco
+    class BH,BHP,SE,SR,WR,WRP wf
+    class PN cinza
+    class PT2 parcial
 ```
 
 ---
@@ -76,6 +85,7 @@ flowchart TD
 ## Diagrama de Sequência
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'actorBkg': '#1f6feb', 'actorTextColor': '#ffffff', 'actorBorder': '#388bfd', 'actorLineColor': '#8b949e', 'signalColor': '#8b949e', 'signalTextColor': '#c9d1d9', 'labelBoxBkgColor': '#21262d', 'labelBoxBorderColor': '#30363d', 'labelTextColor': '#c9d1d9', 'loopTextColor': '#c9d1d9', 'noteBkgColor': '#21262d', 'noteTextColor': '#c9d1d9', 'activationBkgColor': '#388bfd', 'activationBorderColor': '#58a6ff'}}}%%
 sequenceDiagram
     participant PIPE as pipeline_completo.sh
     participant WF as Laudo envio email+cpf

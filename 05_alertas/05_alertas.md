@@ -26,15 +26,20 @@ Três workflows agendados que rodam a cada 10 minutos para monitorar estados de 
 flowchart LR
     SC([Schedule\n10min]) --> Q[(Query consultas_esaj\nJOIN process_tracking\ncurrent_state IN\nMANUAL_PROCESS\nPIPELINE_ERROR\nAUTH_ERROR\nDOWNLOAD_FAILED)]
     Q --> PM[Prepara Mensagens\npor item\nnome + processos + erro OCR]
-    PM --> WA[WhatsApp Cliente\n7 dias úteis]
-    WA --> E1[Email\ncontato@revisaprecatorio]
+    PM --> WA[WhatsApp Cliente\n7 dias uteis]
+    WA --> E1["Email\ncontato@revisaprecatorio"]
     E1 --> E2[Email\npersival + rodrigo]
     E2 --> UPD[(UPDATE consultas_esaj\nALERTA_MANUAL_SENT)]
-    UPD --> LOG[(INSERT logs\n🚨 Alerta grave)]
+    UPD --> LOG[(INSERT logs\nAlerta grave)]
 
-    style SC fill:#9E9E9E,color:#fff
-    style WA fill:#25D366,color:#fff
-    style UPD fill:#6A1B9A,color:#fff
+    classDef entrada fill:#238636,color:#fff,stroke:#2ea043
+    classDef banco   fill:#0d419d,color:#fff,stroke:#1f6feb
+    classDef alerta  fill:#da3633,color:#fff,stroke:#f85149
+    classDef cinza   fill:#57606a,color:#fff,stroke:#6e7781
+
+    class SC,WA entrada
+    class Q,UPD,LOG banco
+    class PM,E1,E2 cinza
 ```
 
 ### Query de Detecção
@@ -67,13 +72,20 @@ GROUP BY ce.id, ce.cpf, ce.current_state, ce.whatsapp_from, ce.nome_requerente, 
 flowchart LR
     SC([Schedule\n10min]) --> Q[(Query Laudo Parcial\nprocess_tracking\nevento=LAUDO_PARCIAL\nsem PARCIAL_INFORMADO)]
     Q --> PM[Prepara Mensagens\nnome + processos + email]
-    PM --> E1[Email\ncontato@revisaprecatorio]
+    PM --> E1["Email\ncontato@revisaprecatorio"]
     E1 --> E2[Email\npersival + rodrigo]
     E2 --> INS[(INSERT process_tracking\nPARCIAL_INFORMADO\nevita reenvio)]
-    INS --> LOG[(INSERT logs\n📧 Alerta parcial)]
+    INS --> LOG[(INSERT logs\nAlerta parcial)]
 
-    style SC fill:#9E9E9E,color:#fff
-    style INS fill:#6A1B9A,color:#fff
+    classDef entrada fill:#238636,color:#fff,stroke:#2ea043
+    classDef banco   fill:#0d419d,color:#fff,stroke:#1f6feb
+    classDef parcial fill:#d29922,color:#000,stroke:#e3b341
+    classDef cinza   fill:#57606a,color:#fff,stroke:#6e7781
+
+    class SC entrada
+    class Q,LOG banco
+    class INS parcial
+    class PM,E1,E2 cinza
 ```
 
 ### Query de Detecção (Anti-Duplicata)
@@ -109,15 +121,19 @@ ORDER BY ce.created_at ASC
 flowchart LR
     SC([Schedule\n10min]) --> Q[(Query consultas_esaj\ncurrent_state\n= MANUAL_PROCESS)]
     Q --> PM[Prepara Mensagens\npor item]
-    PM --> WA[WhatsApp Cliente\n7 dias úteis]
-    WA --> E1[Email\ncontato@revisaprecatorio]
+    PM --> WA[WhatsApp Cliente\n7 dias uteis]
+    WA --> E1["Email\ncontato@revisaprecatorio"]
     E1 --> E2[Email\npersival + rodrigo]
     E2 --> UPD[(UPDATE consultas_esaj\nALERTA_MANUAL_SENT\nWHERE MANUAL_PROCESS)]
-    UPD --> LOG[(INSERT logs\n🚨 Alerta reporte manual)]
+    UPD --> LOG[(INSERT logs\nAlerta reporte manual)]
 
-    style SC fill:#9E9E9E,color:#fff
-    style WA fill:#25D366,color:#fff
-    style UPD fill:#6A1B9A,color:#fff
+    classDef entrada fill:#238636,color:#fff,stroke:#2ea043
+    classDef banco   fill:#0d419d,color:#fff,stroke:#1f6feb
+    classDef cinza   fill:#57606a,color:#fff,stroke:#6e7781
+
+    class SC,WA entrada
+    class Q,UPD,LOG banco
+    class PM,E1,E2 cinza
 ```
 
 ---
@@ -125,6 +141,7 @@ flowchart LR
 ## Diagrama de Sequência Comparativo
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'actorBkg': '#1f6feb', 'actorTextColor': '#ffffff', 'actorBorder': '#388bfd', 'actorLineColor': '#8b949e', 'signalColor': '#8b949e', 'signalTextColor': '#c9d1d9', 'labelBoxBkgColor': '#21262d', 'labelBoxBorderColor': '#30363d', 'labelTextColor': '#c9d1d9', 'loopTextColor': '#c9d1d9', 'noteBkgColor': '#21262d', 'noteTextColor': '#c9d1d9', 'activationBkgColor': '#388bfd', 'activationBorderColor': '#58a6ff'}}}%%
 sequenceDiagram
     participant SCH as Schedule (10min)
     participant WF as Workflow Alerta

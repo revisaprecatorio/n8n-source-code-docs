@@ -24,15 +24,23 @@
 
 ```mermaid
 flowchart LR
-    WH([POST\n/cpf-batch-processing\n{ cpf }]) --> EX[Extract CPF\nsanitiza dígitos\nwhatsapp_from fixo]
+    WH([POST\n/cpf-batch-processing\ncpf]) --> EX[Extract CPF\nsanitiza digitos\nwhatsapp_from fixo]
     EX --> SAJ[Consulta e-SAJ\nGET HTML por CPF]
     SAJ --> PRS[Parse e-SAJ Response\nextrai nome + processos\ndo HTML]
-    PRS --> UPS[(Upsert Consulta\nconsultas_esaj\ncurrent_state=PAYMENT_APPROVED\nmp_payment_status=approved\nmp_payment_id=BATCH_epoch)]
-    UPS --> RES([Respond 200\n{ success, cpf, nome,\ntotal_processos, processos }])
+    PRS --> UPS[(Upsert Consulta\nconsultas_esaj\nPAYMENT_APPROVED\nBATCH_epoch)]
+    UPS --> RES([Respond 200\nsuccess cpf nome\ntotal processos])
 
-    style WH fill:#1565C0,color:#fff
-    style RES fill:#2E7D32,color:#fff
-    style UPS fill:#6A1B9A,color:#fff
+    classDef entrada fill:#238636,color:#fff,stroke:#2ea043
+    classDef wf      fill:#1f6feb,color:#fff,stroke:#388bfd
+    classDef banco   fill:#0d419d,color:#fff,stroke:#1f6feb
+    classDef sucesso fill:#1a7f37,color:#fff,stroke:#2da44e
+    classDef cinza   fill:#57606a,color:#fff,stroke:#6e7781
+
+    class WH entrada
+    class EX,PRS cinza
+    class SAJ wf
+    class UPS banco
+    class RES sucesso
 ```
 
 ---
@@ -40,6 +48,7 @@ flowchart LR
 ## Diagrama de Sequência
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'actorBkg': '#1f6feb', 'actorTextColor': '#ffffff', 'actorBorder': '#388bfd', 'actorLineColor': '#8b949e', 'signalColor': '#8b949e', 'signalTextColor': '#c9d1d9', 'labelBoxBkgColor': '#21262d', 'labelBoxBorderColor': '#30363d', 'labelTextColor': '#c9d1d9', 'loopTextColor': '#c9d1d9', 'noteBkgColor': '#21262d', 'noteTextColor': '#c9d1d9', 'activationBkgColor': '#388bfd', 'activationBorderColor': '#58a6ff'}}}%%
 sequenceDiagram
     actor Admin as Admin/Sistema
     participant WF as CPF_batch_processing

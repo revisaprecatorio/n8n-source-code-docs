@@ -103,12 +103,21 @@ flowchart TD
     PR --> SWA[Send WhatsApp Response\nao cliente]
     SWA --> ROK([Respond OK 200])
 
-    style WH fill:#25D366,color:#fff
-    style RMT fill:#FF9800,color:#fff
-    style HTTP fill:#FF9800,color:#fff
-    style TPW fill:#1565C0,color:#fff
-    style ROK fill:#2E7D32,color:#fff
-    style PTI fill:#C62828,color:#fff
+    classDef entrada fill:#238636,color:#fff,stroke:#2ea043
+    classDef wf      fill:#1f6feb,color:#fff,stroke:#388bfd
+    classDef banco   fill:#0d419d,color:#fff,stroke:#1f6feb
+    classDef sucesso fill:#1a7f37,color:#fff,stroke:#2da44e
+    classDef alerta  fill:#da3633,color:#fff,stroke:#f85149
+    classDef cinza   fill:#57606a,color:#fff,stroke:#6e7781
+    classDef decisao fill:#bf8700,color:#fff,stroke:#d29922
+
+    class WH,WAT,STO,SWA entrada
+    class CFV,RMT,HTTP decisao
+    class FVR,ROK sucesso
+    class GUS,SC,CR,US,PCS banco
+    class SAJ,GVC,SVE,PAR,VC,TPW wf
+    class PTI,EAT alerta
+    class PI,MS,PR,RNT,RCY,RCN,RMN,RIP,RCO,RAG,REM,RCPF cinza
 ```
 
 ---
@@ -116,6 +125,7 @@ flowchart TD
 ## Diagrama de Sequência — Conversa Completa
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'actorBkg': '#1f6feb', 'actorTextColor': '#ffffff', 'actorBorder': '#388bfd', 'actorLineColor': '#8b949e', 'signalColor': '#8b949e', 'signalTextColor': '#c9d1d9', 'labelBoxBkgColor': '#21262d', 'labelBoxBorderColor': '#30363d', 'labelTextColor': '#c9d1d9', 'loopTextColor': '#c9d1d9', 'noteBkgColor': '#21262d', 'noteTextColor': '#c9d1d9', 'activationBkgColor': '#388bfd', 'activationBorderColor': '#58a6ff'}}}%%
 sequenceDiagram
     actor CLI as Cliente (WhatsApp)
     participant WF as Chatbot Revisa
@@ -170,6 +180,7 @@ sequenceDiagram
 ## Máquina de Estados
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'stateBkg': '#1f6feb', 'stateBorder': '#388bfd', 'labelColor': '#ffffff', 'transitionColor': '#8b949e', 'compositeBackground': '#21262d', 'altBackground': '#161b22'}}}%%
 stateDiagram-v2
     [*] --> IDLE : sem registro
 

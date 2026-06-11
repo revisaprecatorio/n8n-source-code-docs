@@ -69,12 +69,21 @@ flowchart TD
         WA2 --> LPS[(Log Payment Success\nlogs INSERT\n+ DELETE esaj_detalhe_processos\n+ DELETE esaj_calc_precatorio_resumo)]
     end
 
-    style RES fill:#4CAF50,color:#fff
-    style SK fill:#9E9E9E,color:#fff
-    style IGN fill:#9E9E9E,color:#fff
-    style WA1 fill:#25D366,color:#fff
-    style WA2 fill:#25D366,color:#fff
-    style LPS fill:#F44336,color:#fff
+    classDef entrada fill:#238636,color:#fff,stroke:#2ea043
+    classDef wf      fill:#1f6feb,color:#fff,stroke:#388bfd
+    classDef banco   fill:#0d419d,color:#fff,stroke:#1f6feb
+    classDef sucesso fill:#1a7f37,color:#fff,stroke:#2da44e
+    classDef alerta  fill:#da3633,color:#fff,stroke:#f85149
+    classDef cinza   fill:#57606a,color:#fff,stroke:#6e7781
+    classDef decisao fill:#bf8700,color:#fff,stroke:#d29922
+
+    class WH1,WH2,WA1,WA2 entrada
+    class VT,FP decisao
+    class RES sucesso
+    class SK,IGN cinza
+    class GL,GPD,PPS wf
+    class SL,PT1,CL,UPS,PTP banco
+    class LPS alerta
 ```
 
 ---
@@ -82,6 +91,7 @@ flowchart TD
 ## Diagrama de Sequência
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'actorBkg': '#1f6feb', 'actorTextColor': '#ffffff', 'actorBorder': '#388bfd', 'actorLineColor': '#8b949e', 'signalColor': '#8b949e', 'signalTextColor': '#c9d1d9', 'labelBoxBkgColor': '#21262d', 'labelBoxBorderColor': '#30363d', 'labelTextColor': '#c9d1d9', 'loopTextColor': '#c9d1d9', 'noteBkgColor': '#21262d', 'noteTextColor': '#c9d1d9', 'activationBkgColor': '#388bfd', 'activationBorderColor': '#58a6ff'}}}%%
 sequenceDiagram
     actor CW as Chatbot Revisa
     actor MP as Mercado Pago
