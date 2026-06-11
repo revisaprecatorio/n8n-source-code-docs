@@ -1,0 +1,576 @@
+{
+  "name": "Mercado Pago Unified",
+  "nodes": [
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"ok\"}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-ok",
+      "name": "Respond OK to MP",
+      "position": [
+        208,
+        304
+      ],
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-type",
+              "leftValue": "={{ $json.body?.type || $json.type }}",
+              "operator": {
+                "operation": "equals",
+                "type": "string"
+              },
+              "rightValue": "payment"
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          }
+        },
+        "options": {}
+      },
+      "id": "filter-payment",
+      "name": "Filter Payment Events",
+      "position": [
+        400,
+        304
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "url": "=https://api.mercadopago.com/v1/payments/{{ $json.body?.data?.id || $json.data?.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-payment-details",
+      "name": "Get Payment Details",
+      "position": [
+        608,
+        208
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KytrAZe3o5ngsDTa",
+          "name": "Mercado Pago API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const payment = $input.first().json;\nconst externalRef = payment.external_reference || '';\nconst parts = externalRef.split('_');\nconst whatsappFrom = parts[0] || '';\nlet workflowState = 'AWAITING_PAYMENT';\nlet responseMessage = '';\n\nswitch (payment.status) {\n  case 'approved': \n    workflowState = 'PAYMENT_APPROVED'; \n    responseMessage = `🎉 *Pagamento confirmado!*\n \nSeu laudo completo de precatórios será enviado para o seu e mail em até 24 horas. Lembre-se de verificar também a caixa de spam.\n \nEm casos de processos físicos scaneados ou que apresentem problemas de configuração, o prazo poderá ser prorrogado em até 7 dias úteis, em razão da dificuldade de leitura dos documentos.\n \nDigite menu para voltar ao início.`; \n    break;\n    \n  case 'rejected': \n    workflowState = 'PAYMENT_REJECTED'; \n    responseMessage = `❌ *Pagamento não aprovado.*\n\nDigite \"sim\" para gerar um novo link.`; \n    break;\n    \n  case 'pending': \n  case 'in_process': \n    workflowState = 'PAYMENT_PENDING'; \n    responseMessage = `⏳ *Pagamento em análise.*\n\nDigite menu para voltar ao início.`; \n    break;\n    \n  default: \n    return [];\n}\n\nreturn [{\n  json: {\n    payment_id: payment.id, \n    status: payment.status, \n    amount: payment.transaction_amount, \n    whatsapp_from: whatsappFrom, \n    external_reference: externalRef, \n    workflow_state: workflowState, \n    response_message: responseMessage\n  }\n}];"
+      },
+      "id": "process-payment",
+      "name": "Process Payment Status",
+      "position": [
+        800,
+        208
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE consultas_esaj SET mp_payment_id = '{{ $json.payment_id }}', mp_payment_status = '{{ $json.status }}', current_state = '{{ $json.workflow_state }}', state_updated_at = NOW(), updated_at = NOW(), payment_confirmed_at = CASE WHEN '{{ $json.status }}' = 'approved' THEN NOW() ELSE payment_confirmed_at END WHERE id = (SELECT id FROM consultas_esaj WHERE mp_external_reference = '{{ $json.external_reference }}' AND cpf != '00000000000' ORDER BY updated_at DESC LIMIT 1) RETURNING id, current_state, mp_payment_status, payment_confirmed_at",
+        "options": {}
+      },
+      "id": "update-payment-status",
+      "name": "Update Payment Status",
+      "position": [
+        1008,
+        208
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "772929385904854",
+        "recipientPhoneNumber": "={{ $('Process Payment Status').item.json.whatsapp_from }}",
+        "textBody": "={{ $('Process Payment Status').item.json.response_message }}",
+        "additionalFields": {}
+      },
+      "id": "send-whatsapp-notification",
+      "name": "Send WhatsApp Notification",
+      "position": [
+        1424,
+        208
+      ],
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "webhookId": "437c0798-a341-4e88-928a-6dfab4fcfbbe",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "ejhZtEKHF0Kh9HeQ",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ignored: true } }];"
+      },
+      "id": "log-ignored",
+      "name": "Log Ignored Event",
+      "position": [
+        608,
+        400
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mercadopago-notification",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b5d97085-8225-47c3-8b7f-a714af0652c4",
+      "name": "Webhook",
+      "position": [
+        48,
+        304
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "webhookId": "ce70f6e0-9a36-4104-bd07-18bf5c092a96",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-payment-link",
+        "options": {}
+      },
+      "id": "webhook-generate-link",
+      "name": "Generate Link Webhook",
+      "position": [
+        0,
+        608
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "mp-generate-payment-link"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "cond-trigger",
+              "leftValue": "={{ $json.body.trigger_payment === true }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            },
+            {
+              "id": "cond-email",
+              "leftValue": "={{ ($json.body.email || '').length > 0 }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          }
+        },
+        "options": {}
+      },
+      "id": "validate-trigger",
+      "name": "Validate Trigger Payment",
+      "position": [
+        192,
+        608
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.mercadopago.com/checkout/preferences",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"items\": [{\"title\": \"Laudo Completo de Precatorios\", \"quantity\": 1, \"currency_id\": \"BRL\", \"unit_price\": 1.00}],\n  \"payer\": {\"email\": \"{{ $('Generate Link Webhook').item.json.body.email }}\"},\n  \"external_reference\": \"{{ $('Generate Link Webhook').item.json.body.whatsapp_from }}_{{ Date.now() }}\",\n  \"notification_url\": \"https://n8n.srv987902.hstgr.cloud/webhook/mercadopago-notification\",\n  \"back_urls\": {\n    \"success\": \"https://revisaprecatorio.com.br/pagamento-sucesso\",\n    \"failure\": \"https://revisaprecatorio.com.br/pagamento-falha\",\n    \"pending\": \"https://revisaprecatorio.com.br/pagamento-pendente\"\n  },\n  \"auto_return\": \"approved\"\n}",
+        "options": {}
+      },
+      "id": "generate-link",
+      "name": "Generate Payment Link",
+      "position": [
+        400,
+        544
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KytrAZe3o5ngsDTa",
+          "name": "Mercado Pago API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE consultas_esaj SET \n  mp_preference_id = '{{ $json.id }}', \n  mp_external_reference = '{{ $json.external_reference }}', \n  payment_link = '{{ $json.init_point }}', \n  payment_created_at = NOW(), \n  current_state = 'AWAITING_PAYMENT', \n  state_updated_at = NOW(), \n  updated_at = NOW(), \n  email = CASE WHEN '{{ $(\"Generate Link Webhook\").item.json.body.email }}' != '' AND '{{ $(\"Generate Link Webhook\").item.json.body.email }}' != 'undefined' \n    THEN '{{ $(\"Generate Link Webhook\").item.json.body.email }}' \n    ELSE consultas_esaj.email END \nWHERE whatsapp_from = '{{ $(\"Generate Link Webhook\").item.json.body.whatsapp_from }}' \n  AND cpf != '00000000000'\n  AND id = (\n    SELECT id FROM consultas_esaj \n    WHERE whatsapp_from = '{{ $(\"Generate Link Webhook\").item.json.body.whatsapp_from }}' \n      AND cpf != '00000000000' \n    ORDER BY created_at DESC \n    LIMIT 1\n  )\nRETURNING id, payment_link, email",
+        "options": {}
+      },
+      "id": "save-link",
+      "name": "Save Payment Link",
+      "position": [
+        608,
+        608
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "772929385904854",
+        "recipientPhoneNumber": "={{ $('Generate Link Webhook').item.json.body.whatsapp_from }}",
+        "textBody": "=💳 *Link de Pagamento*\n\nPara receber seu relatório completo de precatórios, realize o pagamento de *R$ 1,00* (teste) através do link abaixo:\n\n🔗 {{ $('Generate Payment Link').item.json.init_point }}\n\n⏰ Este link é válido por 24 horas. Após o pagamento, você receberá o laudo no email cadastrado.\n\nDigite *menu* para voltar ao início.",
+        "additionalFields": {}
+      },
+      "id": "send-link-wa",
+      "name": "Send Payment Link WA",
+      "position": [
+        1136,
+        608
+      ],
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "webhookId": "f5f2f9c1-9e94-4cfc-91fb-26501f38c157",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "ejhZtEKHF0Kh9HeQ",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { skipped: true, reason: 'trigger_payment is false' } }];"
+      },
+      "id": "log-skipped-payment",
+      "name": "Log Skipped Payment",
+      "position": [
+        400,
+        720
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=DELETE FROM consultas_esaj WHERE whatsapp_from = '{{ $(\"Generate Link Webhook\").item.json.body.whatsapp_from }}' AND cpf = '00000000000' RETURNING id, cpf",
+        "options": {}
+      },
+      "id": "cleanup-session",
+      "name": "Cleanup Session Record",
+      "position": [
+        944,
+        608
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO logs (cpf, descricao, processo)\nSELECT cpf, '💰 Pagamento Confirmado', 'Chatbot'\nFROM consultas_esaj\nWHERE mp_external_reference = '{{ $(\"Process Payment Status\").item.json.external_reference }}'\nLIMIT 1;\n\nDELETE FROM esaj_detalhe_processos\nWHERE cpf = (\n  SELECT cpf FROM consultas_esaj\n  WHERE mp_external_reference = '{{ $(\"Process Payment Status\").item.json.external_reference }}'\n  AND cpf != '00000000000'\n  LIMIT 1\n);\n \nDELETE FROM esaj_calc_precatorio_resumo\nWHERE cpf = (\n  SELECT cpf FROM consultas_esaj\n  WHERE mp_external_reference = '{{ $(\"Process Payment Status\").item.json.external_reference }}'\n  AND cpf != '00000000000'\n  LIMIT 1\n);",
+        "options": {}
+      },
+      "id": "log-payment-success",
+      "name": "Log Payment Success",
+      "position": [
+        1648,
+        208
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO process_tracking (\n    consulta_id,\n    cpf,\n    whatsapp_phone_number,\n    etapa,\n    evento,\n    retries,\n    concluido,\n    erro,\n    detalhes\n)\nSELECT\n    ce.id,\n    ce.cpf,\n    ce.whatsapp_phone_number,\n    'PAYMENT',\n    'LINK_GERADO',\n    0,\n    false,\n    false,\n    jsonb_build_object(\n        'workflow', 'Mercado Pago Unified',\n        'node', 'Save Payment Link',\n        'mp_preference_id', ce.mp_preference_id,\n        'payment_link', ce.payment_link\n    )\nFROM consultas_esaj ce\nWHERE ce.id = {{ $('Save Payment Link').item.json.id }};",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        768,
+        608
+      ],
+      "id": "c0e501c2-56ce-438c-8a18-3e6c3519fb28",
+      "name": "PT Link Gerado",
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO process_tracking (\n    consulta_id,\n    cpf,\n    whatsapp_phone_number,\n    etapa,\n    evento,\n    retries,\n    concluido,\n    erro,\n    detalhes\n)\nSELECT\n    ce.id,\n    ce.cpf,\n    ce.whatsapp_phone_number,\n    'PAYMENT',\n    '{{ $(\"Process Payment Status\").item.json.workflow_state }}',\n    0,\n    {{ $(\"Process Payment Status\").item.json.workflow_state === 'PAYMENT_APPROVED' ? 'false' : 'false' }},\n    {{ $(\"Process Payment Status\").item.json.workflow_state === 'PAYMENT_REJECTED' ? 'true' : 'false' }},\n    jsonb_build_object(\n        'workflow', 'Mercado Pago Unified',\n        'node', 'Update Payment Status',\n        'mp_payment_id', '{{ $(\"Process Payment Status\").item.json.payment_id }}',\n        'mp_status', '{{ $(\"Process Payment Status\").item.json.status }}',\n        'amount', {{ $(\"Process Payment Status\").item.json.amount || 0 }}\n    )\nFROM consultas_esaj ce\nWHERE ce.id = {{ $('Update Payment Status').item.json.id }};",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1216,
+        208
+      ],
+      "id": "be86afeb-6a3d-4122-9e3e-e470bc2eccf1",
+      "name": "PT Status Pagamento",
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Cleanup Session Record": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Send Payment Link WA",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Filter Payment Events": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Get Payment Details",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Log Ignored Event",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Generate Link Webhook": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Validate Trigger Payment",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Generate Payment Link": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Save Payment Link",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Get Payment Details": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Process Payment Status",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Process Payment Status": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Update Payment Status",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Save Payment Link": {
+      "main": [
+        [
+          {
+            "node": "PT Link Gerado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send WhatsApp Notification": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Log Payment Success",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Update Payment Status": {
+      "main": [
+        [
+          {
+            "node": "PT Status Pagamento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Trigger Payment": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Generate Payment Link",
+            "type": "main"
+          }
+        ],
+        [
+          {
+            "index": 0,
+            "node": "Log Skipped Payment",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Respond OK to MP",
+            "type": "main"
+          },
+          {
+            "index": 0,
+            "node": "Filter Payment Events",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "PT Link Gerado": {
+      "main": [
+        [
+          {
+            "node": "Cleanup Session Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PT Status Pagamento": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "93c9112d-8556-43a6-a88a-c5f282a8837e",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "987849d7ed7aff758690b6a5c22582879580ea3a6254650b3e67b60c78c6eed3"
+  },
+  "id": "6COT3ubybyI8QhYT",
+  "tags": []
+}

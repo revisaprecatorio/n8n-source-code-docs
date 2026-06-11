@@ -1,0 +1,201 @@
+{
+  "name": "CPF_batch_processing",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cpf-batch-processing",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "position": [
+        32,
+        304
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "cpf-batch-processing",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cpf-raw",
+              "name": "cpf",
+              "type": "string",
+              "value": "={{ ($json.body.cpf || $json.cpf || '').toString().replace(/[^0-9]/g, '') }}"
+            },
+            {
+              "id": "whatsapp-const",
+              "name": "whatsapp_from",
+              "type": "string",
+              "value": "5511941455345"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-cpf",
+      "name": "Extract CPF",
+      "position": [
+        224,
+        304
+      ],
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "url": "=https://esaj.tjsp.jus.br/cpopg/search.do?conversationId=&cbPesquisa=DOCPARTE&dadosConsulta.valorConsulta={{ $('Extract CPF').item.json.cpf }}&cdForo=-1",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "consulta-esaj",
+      "name": "Consulta e-SAJ",
+      "position": [
+        400,
+        304
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.first().json.data || $input.first().json.body || '';\nconst cpf = $('Extract CPF').item.json.cpf;\n\nlet nome_extraido = 'N/A';\nlet processos_array = [];\nlet classe_extraida = 'Processo';\n\n// Função para limpar nome extraído\nfunction limparNome(texto) {\n  if (!texto) return 'N/A';\n  let limpo = texto.replace(/<[^>]+>/g, ' ');\n  limpo = limpo.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&');\n  limpo = limpo.split(/Advogado|<br/i)[0];\n  limpo = limpo.replace(/[\\s\\n\\r]+/g, ' ').trim();\n  if (/^\\d{2}\\/\\d{2}\\/\\d{4}/.test(limpo)) return 'N/A';\n  if (limpo.length < 3) return 'N/A';\n  return limpo;\n}\n\n// Detectar tipo de página\nconst isListPage = html.includes('Processos encontrados') || html.includes('linkProcesso');\nconst isSinglePage = html.includes('unj-entity-header') || \n                     (html.includes('Classe') && html.includes('Assunto') && html.includes('Foro') && html.includes('Vara'));\nconst naoEncontrado = html.includes('Não foram encontrados processos') || html.includes('Nenhum registro localizado');\n\nif (naoEncontrado) {\n  nome_extraido = 'N/A';\n  processos_array = [];\n} else if (isListPage && !isSinglePage) {\n  // FORMATO LISTA (múltiplos processos)\n  \n  // Extrair NOME - usar classe nomeParte\n  const nomeMatch = html.match(/class=\"[^\"]*nomeParte[^\"]*\"[^>]*>\\s*([^<]+)/i);\n  if (nomeMatch && nomeMatch[1]) {\n    nome_extraido = limparNome(nomeMatch[1]);\n  }\n  \n  // Extrair cada processo da lista\n  // Padrão: linkProcesso contém número, classeProcesso contém classe, dataLocalDistribuicaoProcesso contém data\n  const processoBlocks = html.split(/id=\"divProcesso/);\n  \n  for (let i = 1; i < processoBlocks.length; i++) {\n    const block = processoBlocks[i];\n    \n    // Número do processo\n    const numMatch = block.match(/class=\"linkProcesso\"[^>]*>\\s*(\\d{7}-\\d{2}\\.\\d{4}\\.\\d\\.\\d{2}\\.\\d{4})/i);\n    if (!numMatch) continue;\n    const numero = numMatch[1];\n    \n    // Classe do processo\n    const classeMatch = block.match(/class=\"classeProcesso\"[^>]*>([^<]+)/i);\n    const classe = classeMatch ? classeMatch[1].trim() : 'Processo';\n    \n    // Data do processo\n    const dataMatch = block.match(/class=\"dataLocalDistribuicaoProcesso\"[^>]*>([^<-]+)/i);\n    const data = dataMatch ? dataMatch[1].trim() : new Date().toLocaleDateString('pt-BR');\n    \n    processos_array.push({ numero, classe, data });\n  }\n  \n  // Fallback: se não encontrou processos com o método acima, usar regex global\n  if (processos_array.length === 0) {\n    const processoRegex = /(\\d{7}-\\d{2}\\.\\d{4}\\.\\d\\.\\d{2}\\.\\d{4})/g;\n    let match;\n    const seen = new Set();\n    while ((match = processoRegex.exec(html)) !== null) {\n      if (!seen.has(match[1])) {\n        seen.add(match[1]);\n        processos_array.push({\n          numero: match[1],\n          classe: 'Processo',\n          data: new Date().toLocaleDateString('pt-BR')\n        });\n      }\n    }\n  }\n} else if (isSinglePage) {\n  // FORMATO PÁGINA ÚNICA (detalhes do processo)\n  \n  // Extrair número do processo\n  const numMatch = html.match(/(\\d{7}-\\d{2}\\.\\d{4}\\.\\d\\.\\d{2}\\.\\d{4})/);\n  \n  // CLASSE - id=\"classeProcesso\"\n  const classeMatch = html.match(/id=\"classeProcesso\"[^>]*>([^<]+)/i);\n  if (classeMatch && classeMatch[1]) {\n    classe_extraida = classeMatch[1].trim();\n  }\n  \n  // NOME - classe nomeParteEAdvogado\n  const nomePatterns = [\n    /nomeParteEAdvogado[^>]*>[\\s\\n]*([A-ZÀ-Ú][A-Za-zÀ-ÿ\\s]+?)(?:\\s*<br|\\s*Advogad)/i,\n    /class=\"[^\"]*nomeParte[^\"]*\"[^>]*>\\s*([^<]+)/i,\n    /tipoDeParticipacao[\"'][^>]*>Reqte[\\s\\S]{0,500}?>([A-ZÀ-Ú][A-Za-zÀ-ÿ\\s]+?)(?:\\s*<br|\\s*Advogad)/i\n  ];\n  \n  for (const pattern of nomePatterns) {\n    const match = html.match(pattern);\n    if (match && match[1]) {\n      const nome = limparNome(match[1]);\n      if (nome !== 'N/A' && nome.length >= 5 && !/^(Reqte|Requerente|Polo|SÃO PAULO)/i.test(nome)) {\n        nome_extraido = nome;\n        break;\n      }\n    }\n  }\n  \n  if (numMatch) {\n    processos_array.push({\n      numero: numMatch[1],\n      classe: classe_extraida,\n      data: new Date().toLocaleDateString('pt-BR')\n    });\n  }\n} else {\n  // Fallback genérico\n  const processoRegex = /(\\d{7}-\\d{2}\\.\\d{4}\\.\\d\\.\\d{2}\\.\\d{4})/g;\n  let match;\n  const seen = new Set();\n  while ((match = processoRegex.exec(html)) !== null) {\n    if (!seen.has(match[1])) {\n      seen.add(match[1]);\n      processos_array.push({\n        numero: match[1],\n        classe: 'Processo',\n        data: new Date().toLocaleDateString('pt-BR')\n      });\n    }\n  }\n}\n\nconst total_processos = processos_array.length;\n\nlet responseText = 'Consulta sistema do Tribunal Judiciario\\n\\n';\nresponseText += `Prezado(a) ${nome_extraido}, CPF: ${cpf}\\n\\n`;\n\nif (total_processos > 0) {\n  responseText += 'Localizamos os seguintes requerimentos:\\n';\n  processos_array.forEach(p => {\n    responseText += `${p.data} ${p.numero} ${p.classe}\\n`;\n  });\n} else {\n  responseText += 'Nenhum processo localizado para este CPF.\\n';\n}\n\nresponseText += `\\nConsulta oficial realizada no sistema do Tribunal de Justica as ${new Date().toLocaleDateString('pt-BR')}, ${new Date().toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'})}`;\n\nreturn [{\n  json: {\n    cpf,\n    nome_extraido,\n    processos_array,\n    total_processos,\n    responseText,\n    _debug: {\n      isListPage,\n      isSinglePage,\n      naoEncontrado,\n      classe_extraida,\n      htmlLength: html.length\n    }\n  }\n}];"
+      },
+      "id": "parse-response",
+      "name": "Parse e-SAJ Response",
+      "position": [
+        592,
+        304
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO consultas_esaj (whatsapp_from, whatsapp_phone_number, cpf, nome_requerente, processos, total_processos, resposta_formatada, current_state, state_updated_at, timestamp_consulta, created_at, updated_at, mp_payment_status, mp_payment_id, mp_payment_amount, payment_confirmed_at) VALUES ('5511941455345', '5511941455345', '{{ $json.cpf }}', '{{ ($json.nome_extraido || \"N/A\").replace(/'/g, \"''\") }}', '{{ JSON.stringify({lista: $json.processos_array || []}) }}'::jsonb, {{ $json.total_processos || 0 }}, '{{ ($json.responseText || \"\").replace(/'/g, \"''\") }}', 'PAYMENT_APPROVED', NOW(), NOW(), NOW(), NOW(), 'approved', 'BATCH_' || EXTRACT(EPOCH FROM NOW())::text, 1.00, NOW()) ON CONFLICT (whatsapp_from, cpf) DO UPDATE SET nome_requerente = EXCLUDED.nome_requerente, processos = EXCLUDED.processos, total_processos = EXCLUDED.total_processos, resposta_formatada = EXCLUDED.resposta_formatada, current_state = EXCLUDED.current_state, state_updated_at = NOW(), timestamp_consulta = NOW(), updated_at = NOW(), mp_payment_status = EXCLUDED.mp_payment_status, mp_payment_id = EXCLUDED.mp_payment_id, mp_payment_amount = EXCLUDED.mp_payment_amount, payment_confirmed_at = EXCLUDED.payment_confirmed_at RETURNING id, cpf, nome_requerente, total_processos",
+        "options": {}
+      },
+      "id": "insert-consulta",
+      "name": "Upsert Consulta",
+      "position": [
+        768,
+        304
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"cpf\": \"{{ $('Parse e-SAJ Response').item.json.cpf }}\",\n  \"nome\": \"{{ $('Parse e-SAJ Response').item.json.nome_extraido }}\",\n  \"total_processos\": {{ $('Parse e-SAJ Response').item.json.total_processos }},\n  \"processos\": {{ JSON.stringify($('Parse e-SAJ Response').item.json.processos_array, null, 2) }},\n  \"resposta\": \"{{ $('Parse e-SAJ Response').item.json.responseText.replace(/\"/g, '\\\\\"').replace(/\\n/g, '\\\\n') }}\",\n  \"status_pagamento\": \"PAYMENT_APPROVED\",\n  \"inserted_id\": {{ $json.id || 0 }}\n}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "position": [
+        960,
+        304
+      ],
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Consulta e-SAJ": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Parse e-SAJ Response",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Upsert Consulta": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Respond to Webhook",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Parse e-SAJ Response": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Upsert Consulta",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Extract CPF",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Extract CPF": {
+      "main": [
+        [
+          {
+            "node": "Consulta e-SAJ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "7829a489-2e8e-434b-ba0a-aa073bb05034",
+  "meta": {
+    "instanceId": "987849d7ed7aff758690b6a5c22582879580ea3a6254650b3e67b60c78c6eed3"
+  },
+  "id": "jMzstMZfztUMz7O6",
+  "tags": []
+}

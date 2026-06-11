@@ -1,0 +1,245 @@
+{
+  "name": "Alerta_Laudo_Parcial",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger-parcial",
+      "name": "Schedule Trigger",
+      "position": [
+        0,
+        0
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT pt.id as pt_id, pt.consulta_id, pt.cpf, ce.whatsapp_from, ce.nome_requerente, ce.email, ce.processos FROM process_tracking pt JOIN consultas_esaj ce ON ce.cpf = pt.cpf WHERE pt.evento = 'LAUDO_PARCIAL' AND NOT EXISTS ( SELECT 1 FROM process_tracking pt2 WHERE pt2.cpf = pt.cpf AND pt2.consulta_id IS NOT DISTINCT FROM pt.consulta_id AND pt2.evento = 'PARCIAL_INFORMADO' ) ORDER BY ce.created_at ASC",
+        "options": {}
+      },
+      "alwaysOutputData": true,
+      "id": "query-laudo-parcial",
+      "name": "Query Laudo Parcial",
+      "position": [
+        208,
+        0
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const row = $input.item.json;\n\n// Se a query nao retornou dados reais, encerra silenciosamente\nif (!row || !row.nome_requerente) {\n  return null;\n}\n\nconst cpf = row.cpf;\nconst pt_id = row.pt_id;\nconst consulta_id = row.consulta_id;\nconst whatsapp_from = row.whatsapp_from;\nconst nome_requerente = row.nome_requerente;\nconst email = row.email || 'não informado';\n\n// Parse do campo processos: pode ser objeto (postgres jsonb) ou string (text)\nlet lista_processos = [];\ntry {\n  let processosObj;\n  if (typeof row.processos === 'string') {\n    processosObj = JSON.parse(row.processos);\n  } else {\n    processosObj = row.processos;\n  }\n  lista_processos = (processosObj.lista || []).map(p => p.numero);\n} catch(e) {\n  lista_processos = ['Não foi possível extrair os números dos processos'];\n}\n\nconst processos_formatados_texto = lista_processos.join('\\n');\nconst processos_formatados_html = lista_processos.map(n => `<li>${n}</li>`).join('');\n\nconst msg_cliente = `Prezado Sr(a) ${nome_requerente} recebemos a sua solicitação e informamos que, devido a uma instabilidade do sistema do Tribunal de Justiça do Estado de São Paulo, o seu laudo diagnóstico de precatório será enviado em até 7 (sete) dias úteis.\\n\\nContamos com a sua compreensão e agradecemos o contato.\\n\\nAtenciosamente,\\nRevisa Precatório`;\n\nconst msg_interna_texto = `CPF ${cpf} do cliente ${nome_requerente} possui laudo parcial e requer processamento manual, numero dos processos envolvidos:\\n${processos_formatados_texto}\\n\\ne enviar ao email ${email}`;\n\nconst msg_interna_html = `<p>CPF <strong>${cpf}</strong> do cliente <strong>${nome_requerente}</strong> possui laudo parcial e requer processamento manual.</p><p><strong>Número dos processos envolvidos:</strong></p><ul>${processos_formatados_html}</ul><p>Enviar ao email: <a href=\"mailto:${email}\">${email}</a></p>`;\n\nreturn {\n  json: {\n    cpf,\n    pt_id,\n    consulta_id,\n    whatsapp_from,\n    nome_requerente,\n    email,\n    msg_cliente,\n    msg_interna_texto,\n    msg_interna_html\n  }\n};"
+      },
+      "id": "code-prepara-mensagens-parcial",
+      "name": "Prepara Mensagens",
+      "position": [
+        400,
+        0
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "fromEmail": "Revisa Precatório <contato@revisaprecatorio.com.br>",
+        "toEmail": "contato@revisaprecatorio.com.br",
+        "subject": "={{ 'Processamento PARCIAL CPF ' + $('Prepara Mensagens').item.json.cpf + ' necessita intervenção manual' }}",
+        "html": "={{ $('Prepara Mensagens').item.json.msg_interna_html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "email-contato-parcial",
+      "name": "Email contato@revisaprecatorio",
+      "position": [
+        576,
+        0
+      ],
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "webhookId": "ccff9f7f-b260-43a0-a34a-f433980e6792",
+      "credentials": {
+        "smtp": {
+          "id": "QhA560IeJvTVywaS",
+          "name": "SMTP revisa"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "fromEmail": "Revisa Precatório <contato@revisaprecatorio.com.br>",
+        "toEmail": "persival.balleste@gmail.com, dr.rodrigoferrao@gmail.com",
+        "subject": "={{ 'Processamento PARCIAL CPF ' + $('Prepara Mensagens').item.json.cpf + ' necessita intervenção manual' }}",
+        "html": "={{ $('Prepara Mensagens').item.json.msg_interna_html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "email-persival-parcial",
+      "name": "Email persival@gmail",
+      "position": [
+        800,
+        0
+      ],
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "webhookId": "32da60d3-34a8-4289-bff9-64cdb21618b5",
+      "credentials": {
+        "smtp": {
+          "id": "QhA560IeJvTVywaS",
+          "name": "SMTP revisa"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO process_tracking (consulta_id, cpf, etapa, evento, retries, concluido, erro, detalhes) SELECT pt.consulta_id, pt.cpf, 'LAUDO_PARCIAL', 'PARCIAL_INFORMADO', 0, true, false, '{\"node\": \"Alerta_Laudo_Parcial\", \"workflow\": \"Alerta_Laudo_Parcial\", \"email_destino\": \"contato@revisaprecatorio.com.br\"}'::jsonb FROM process_tracking pt WHERE pt.evento = 'LAUDO_PARCIAL' AND NOT EXISTS ( SELECT 1 FROM process_tracking pt2 WHERE pt2.cpf = pt.cpf AND (pt2.consulta_id = pt.consulta_id OR (pt2.consulta_id IS NULL AND pt.consulta_id IS NULL)) AND pt2.evento = 'PARCIAL_INFORMADO' )",
+        "options": {}
+      },
+      "id": "insert-parcial-informado",
+      "name": "Insert PARCIAL_INFORMADO",
+      "position": [
+        976,
+        0
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO logs (cpf, descricao, processo) VALUES ('BATCH', '📧 Alerta laudo parcial enviado em batch - PARCIAL_INFORMADO inserido', 'n8n')",
+        "options": {}
+      },
+      "id": "log-laudo-parcial",
+      "name": "Log Laudo Parcial",
+      "position": [
+        1168,
+        0
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Email contato@revisaprecatorio": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Email persival@gmail",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Email persival@gmail": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Insert PARCIAL_INFORMADO",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Insert PARCIAL_INFORMADO": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Log Laudo Parcial",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Query Laudo Parcial": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Prepara Mensagens",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Query Laudo Parcial",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Prepara Mensagens": {
+      "main": [
+        [
+          {
+            "node": "Email contato@revisaprecatorio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "7796ba9d-a761-4bd1-80c7-dcb79d7d373a",
+  "meta": {
+    "instanceId": "987849d7ed7aff758690b6a5c22582879580ea3a6254650b3e67b60c78c6eed3"
+  },
+  "id": "nWttny9O5BjKabz2",
+  "tags": []
+}

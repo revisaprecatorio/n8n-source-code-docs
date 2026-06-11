@@ -1,0 +1,281 @@
+{
+  "name": "Alerta_ERROS_GRAVES",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "549b6879-5a6d-4e25-8c65-1620f18e5e12",
+      "name": "Schedule Trigger",
+      "position": [
+        0,
+        0
+      ],
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n    ce.id AS consulta_id,\n    ce.cpf, \n    ce.current_state,\n    ce.whatsapp_from, \n    ce.nome_requerente, \n    ce.email, \n    ce.processos,\n    STRING_AGG(DISTINCT pt.mensagem_erro, ' | ') AS erros_ocr\nFROM consultas_esaj ce\nLEFT JOIN process_tracking pt \n    ON pt.consulta_id = ce.id\n    AND pt.evento = 'OCR_ERRO'\n    AND pt.mensagem_erro IS NOT NULL\nWHERE ce.current_state IN (\n    'MANUAL_PROCESS',\n    'PIPELINE_ERROR',\n    'AUTH_ERROR',\n    'DOWNLOAD_FAILED'\n)\nGROUP BY ce.id, ce.cpf, ce.current_state, ce.whatsapp_from, \n         ce.nome_requerente, ce.email, ce.processos",
+        "options": {}
+      },
+      "alwaysOutputData": true,
+      "id": "a57c21d3-c786-4ed8-8c4d-3631836eb4cf",
+      "name": "Query consultas_esaj",
+      "position": [
+        208,
+        0
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const row = $input.item.json;\n\nif (!row || !row.nome_requerente) {\n  return null;\n}\n\nconst cpf = row.cpf;\nconst consulta_id = row.consulta_id;\nconst current_state = row.current_state;\nconst whatsapp_from = row.whatsapp_from;\nconst nome_requerente = row.nome_requerente;\nconst email = row.email || 'não informado';\nconst erros_ocr = row.erros_ocr || null;\n\nlet lista_processos = [];\ntry {\n  let processosObj = typeof row.processos === 'string'\n    ? JSON.parse(row.processos)\n    : row.processos;\n  lista_processos = (processosObj.lista || []).map(p => p.numero);\n} catch(e) {\n  lista_processos = ['Não foi possível extrair os números dos processos'];\n}\n\nconst processos_formatados_html = lista_processos.map(n => `<li>${n}</li>`).join('');\n\nconst msg_cliente = `Verificamos que o seu precatório tem documento escaneados ou com incompatibilidade de configuração no sistema do Tribunal de Justiça, motivo pelo qual o laudo será encaminhado em até 7 dias úteis em seu email`;\n\nconst detalhe_erro = erros_ocr\n  ? `<p><strong>Erro OCR encontrado:</strong><br><code>${erros_ocr}</code></p>`\n  : `<p><strong>Tipo de erro:</strong> <code>${current_state}</code> (sem detalhe de OCR disponível — verificar tabela logs)</p>`;\n\nconst msg_interna_html = `\n  <p>CPF <strong>${cpf}</strong> — cliente <strong>${nome_requerente}</strong> não pôde ser processado automaticamente.</p>\n  <p><strong>Estado atual:</strong> <code>${current_state}</code></p>\n  <p><strong>Processos envolvidos:</strong></p>\n  <ul>${processos_formatados_html}</ul>\n  ${detalhe_erro}\n  <p>Laudo a ser enviado ao email: <a href=\"mailto:${email}\">${email}</a></p>\n`;\n\nconst log_descricao = `🚨 Alerta erro grave enviado (${current_state}) - ALERTA_MANUAL_SENT`;\nreturn { json: { cpf, consulta_id, current_state, whatsapp_from, nome_requerente, email, msg_cliente, msg_interna_html, log_descricao } };"
+      },
+      "id": "a1e3af9d-cb34-469a-8318-31812aec4c1d",
+      "name": "Prepara Mensagens",
+      "position": [
+        400,
+        0
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "772929385904854",
+        "recipientPhoneNumber": "={{ $json.whatsapp_from }}",
+        "textBody": "={{ $json.msg_cliente }}",
+        "additionalFields": {}
+      },
+      "id": "3d611802-f429-4734-a9fc-9e3133f620c8",
+      "name": "WhatsApp Cliente",
+      "position": [
+        608,
+        0
+      ],
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "webhookId": "5257d47a-a534-4f36-aaf9-c6eb2ffe8d4a",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "ejhZtEKHF0Kh9HeQ",
+          "name": "WhatsApp account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "fromEmail": "Revisa Precatório <contato@revisaprecatorio.com.br>",
+        "toEmail": "contato@revisaprecatorio.com.br",
+        "subject": "={{ 'Erro processamento CPF ' + $('Prepara Mensagens').item.json.cpf + ' necessita intervenção manual' }}",
+        "html": "={{ $('Prepara Mensagens').item.json.msg_interna_html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "ac8a7a06-b9ea-4d29-9bd4-70143f2a9918",
+      "name": "Email contato@revisaprecatorio",
+      "position": [
+        800,
+        0
+      ],
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "webhookId": "e3639476-b573-42d1-a696-3ed2a33206b2",
+      "credentials": {
+        "smtp": {
+          "id": "QhA560IeJvTVywaS",
+          "name": "SMTP revisa"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "fromEmail": "Revisa Precatório <contato@revisaprecatorio.com.br>",
+        "toEmail": "persival.balleste@gmail.com, dr.rodrigoferrao@gmail.com",
+        "subject": "={{ 'Erro processamento CPF ' + $('Prepara Mensagens').item.json.cpf + ' necessita intervenção manual' }}",
+        "html": "={{ $('Prepara Mensagens').item.json.msg_interna_html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "90a43fb3-ba79-404f-bbb7-0dd8c2a9b45a",
+      "name": "Email persival@gmail",
+      "position": [
+        1008,
+        0
+      ],
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "webhookId": "79616885-bca4-4c32-aad9-ac3ffe306e0d",
+      "credentials": {
+        "smtp": {
+          "id": "QhA560IeJvTVywaS",
+          "name": "SMTP revisa"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE consultas_esaj \nSET current_state = 'ALERTA_MANUAL_SENT',\n    state_updated_at = NOW()\nWHERE id = {{ $('Prepara Mensagens').item.json.consulta_id }}\n  AND current_state IN (\n      'MANUAL_PROCESS',\n      'PIPELINE_ERROR',\n      'AUTH_ERROR',\n      'DOWNLOAD_FAILED'\n  )\nRETURNING id, cpf",
+        "options": {}
+      },
+      "id": "47c4efe3-effc-4a28-85df-2b03a0ee97ef",
+      "name": "Update current_state ALERTA_MANUAL_SENT",
+      "position": [
+        1200,
+        0
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO logs (cpf, descricao, processo) \nVALUES (\n    '{{ $json.cpf }}',\n    '🚨 Alerta erro grave enviado - ALERTA_MANUAL_SENT',\n    'n8n'\n)",
+        "options": {}
+      },
+      "id": "22cc0c97-0c90-44ea-a264-9c5478ebb252",
+      "name": "Log Alerta Manual",
+      "position": [
+        1408,
+        0
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Email contato@revisaprecatorio": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Email persival@gmail",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Email persival@gmail": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Update current_state ALERTA_MANUAL_SENT",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Prepara Mensagens": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "WhatsApp Cliente",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Query consultas_esaj": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Prepara Mensagens",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Query consultas_esaj",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Update current_state ALERTA_MANUAL_SENT": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Log Alerta Manual",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "WhatsApp Cliente": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Email contato@revisaprecatorio",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "3d86ba57-4a9d-4f19-af57-2455c05c1ebf",
+  "meta": {
+    "instanceId": "987849d7ed7aff758690b6a5c22582879580ea3a6254650b3e67b60c78c6eed3"
+  },
+  "id": "GnL3nOy64DmpjHTD",
+  "tags": []
+}

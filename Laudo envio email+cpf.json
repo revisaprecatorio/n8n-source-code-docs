@@ -1,0 +1,631 @@
+{
+  "name": "Laudo envio email+cpf",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reporte-email-cpf",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger-email-cpf",
+      "name": "Webhook Email + CPF",
+      "position": [
+        -336,
+        112
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "63fea9ef-f350-4c96-bd30-db5ac67b1100",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM public.vw_precatorios_full WHERE cpf = '{{ $(\"Check Processamento Completo\").item.json.cpf }}';",
+        "options": {}
+      },
+      "alwaysOutputData": false,
+      "id": "fetch-data-cpf-002",
+      "name": "Fetch Data for CPF",
+      "position": [
+        192,
+        16
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Pegar CPF e EMAIL do webhook\nconst cpf = $('Webhook Email + CPF').item.json.body.cpf;\nconst email = $('Webhook Email + CPF').item.json.body.email;\nconst processos = items.map(i => i.json);\n\n// Validar se há dados\nif (!processos || processos.length === 0 || !processos[0].cpf) {\n  throw new Error(`Nenhum dado encontrado para o CPF ${cpf}`);\n}\n\n// === CONSOLIDAÇÃO DE DADOS ===\nconst qtd_processos = processos.length;\n\nconst nome_requerente = (processos[0].credor_nome && processos[0].credor_nome.trim())\n  || (processos[0].nome_requerente && processos[0].nome_requerente.trim())\n  || 'Não informado';\n\nconst data_atual = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });\n\n// Varas distintas\nconst varas = [...new Set(processos.map(p => p.vara).filter(Boolean))];\nconst varas_responsaveis = varas.join(', ') || 'Não informado';\n\n// Total corrigido (apenas processos não rejeitados)\nconst total_corrigido = processos\n  .filter(p => p.rejeitado !== true && p.rejeitado !== 't')\n  .reduce((sum, p) => sum + (parseFloat(p.total_corrigido || 0)), 0);\n\n// === VERIFICAR ANOMALIA ===\nconst tem_anomalia = processos.some(p => p.anomalia === true || p.anomalia === 't');\n\n// === SITUAÇÃO GERAL - VERIFICAR PENDÊNCIAS ===\nconst qtd_rejeitados = processos.filter(p => p.rejeitado === true || p.rejeitado === 't').length;\nconst tem_pendencias = qtd_rejeitados > 0;\nlet situacao_geral = '';\nif (tem_pendencias) {\n  situacao_geral = `⚠️ ${qtd_rejeitados} de ${qtd_processos} precatório(s) apresentam pendências`;\n} else {\n  situacao_geral = '✅ Nenhum precatório apresenta pendências';\n}\n\n// Indicadores de prioridade\nconst idoso = processos[0].idoso === true || processos[0].idoso === 't';\nconst doenca_grave = processos[0].doenca_grave === true || processos[0].doenca_grave === 't';\nconst pcd = processos[0].pcd === true || processos[0].pcd === 't';\nconst preferencial = processos[0].preferencial === true || processos[0].preferencial === 't';\nconst tem_indicador_prioridade = idoso || doenca_grave || pcd;\n\nlet prioridade_tipo = [];\nif (idoso) prioridade_tipo.push('idade');\nif (doenca_grave) prioridade_tipo.push('doença grave');\nif (pcd) prioridade_tipo.push('PCD');\nconst prioridade_texto = prioridade_tipo.join(', ');\n\n// Verificar óbito e habilitação\nconst tem_obito = processos.some(p => p.obito === true || p.obito === 't');\nconst tem_habilitacao = processos.some(p => p.habilitacao_herdeiros === true || p.habilitacao_herdeiros === 't');\n\n// === FALLBACK DE DATA DE NASCIMENTO ===\nconst dobCpf = processos.find(p => p.data_nascimento)?.data_nascimento || null;\n\n// === FUNÇÕES AUXILIARES PARA PREVISÃO ===\nconst parseAnoNumeroOrdem = (numeroOrdem) => {\n  if (!numeroOrdem) return null;\n  const m = numeroOrdem.trim().match(/(\\d{1,6})\\s*\\/\\s*((?:19|20)\\d{2})/);\n  return m ? parseInt(m[2], 10) : null;\n};\n\nconst calcAno61 = (dataNascimento) => {\n  if (!dataNascimento) return null;\n  try {\n    return new Date(dataNascimento).getFullYear() + 61;\n  } catch {\n    return null;\n  }\n};\n\nconst isParcial = (saldoFinal, valorTotalRequisitado) => {\n  const sf = parseFloat(saldoFinal || 0);\n  const vtr = parseFloat(valorTotalRequisitado || 0);\n  return sf > 0 && vtr > 0 && sf < vtr;\n};\n\nconst calcularPrevisaoPagamento = (p) => {\n  const rejeitado = p.rejeitado === true || p.rejeitado === 't';\n  const numeroOrdem = p.numero_ordem || '';\n  const Yord = parseAnoNumeroOrdem(numeroOrdem);\n  const dataNasc = p.data_nascimento || dobCpf;\n  const Y61 = calcAno61(dataNasc);\n  const saldoFinal = parseFloat(p.saldo_final || 0);\n  const valorTotalRequisitado = parseFloat(p.valor_total_requisitado || 0);\n  const parcial = isParcial(saldoFinal, valorTotalRequisitado);\n\n  // Precedência de regras\n  if (rejeitado) {\n    return 'Sem previsão (precatório rejeitado)';\n  }\n  \n  if (!Yord) {\n    return 'Sem previsão de pagamento';\n  }\n  \n  if (parcial) {\n    return `${Yord + 15}`;\n  }\n  \n  // Caso normal\n  if (!idoso) {\n    // Não-idoso: min(Y61, Yord+15)\n    if (Y61) {\n      return `${Math.min(Y61, Yord + 15)}`;\n    } else {\n      return `${Yord + 15}`;\n    }\n  } else {\n    // Idoso\n    if (Y61 && Yord < Y61) {\n      return `${Math.min(Y61, Yord + 15)}`;\n    } else if (Y61 && Yord >= Y61) {\n      return `${Yord + 1}`;\n    } else {\n      return `${Yord + 15}`;\n    }\n  }\n};\n\n// === FORMATAÇÃO DE VALORES ===\nconst formatarMoeda = (valor) => {\n  return parseFloat(valor || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\n};\n\n// === LOGO URL (Imgur hospedado) ===\nconst logoUrl = 'https://i.imgur.com/hqX2yli.jpeg';\n\n// === GERAR HTML DOS PROCESSOS ===\nlet processos_html = '';\n\nprocessos.forEach((p, index) => {\n  const rejeitado = p.rejeitado === true || p.rejeitado === 't';\n  const temNumOrdem = p.numero_ordem && p.numero_ordem.trim() !== '';\n  let status_processo = '';\n  if (rejeitado) {\n    status_processo = '<span class=\"rejected\">❌ Rejeitado</span>';\n  } else if (temNumOrdem) {\n    status_processo = `<span class=\"ok\">✅ Possui número de ordem: ${p.numero_ordem}</span>`;\n  } else {\n    status_processo = '<span class=\"value\">Sem previsão de pagamento</span>';\n  }\n  \n  const temHerdeiros = p.habilitacao_herdeiros === true || p.habilitacao_herdeiros === 't';\n  \n  // Calcular previsão de pagamento\n  const previsaoPagamento = calcularPrevisaoPagamento(p);\n  \n  // Regras SIM/NÃO\n  const acordo = !rejeitado && temNumOrdem;\n  const cessao = !rejeitado && temNumOrdem;\n  \n  processos_html += `\n  <div style=\"margin-bottom: 28px; padding: 16px; border: 1px solid #e0e0e0; border-radius: 4px; background-color: #fafafa;\">\n    <h3 style=\"margin: 0 0 12px 0; color: #333; font-size: 16px;\">📋 Processo ${index + 1}</h3>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Número do Processo:</span> <span class=\"value\">${p.numero_processo_cnj || 'Não informado'}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Número de Ordem:</span> <span class=\"value\">${p.numero_ordem || 'Não informado'}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Vara Responsável:</span> <span class=\"value\">${p.vara || 'Não informado'}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Valor Original:</span> <span class=\"highlight\">R$ ${formatarMoeda(p.valor_principal_bruto)}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Saldo Final:</span> <span class=\"highlight\">R$ ${formatarMoeda(p.saldo_final)}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Valor Atualizado:</span> <span class=\"highlight\">R$ ${formatarMoeda(p.total_corrigido)}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Status:</span> ${status_processo}</p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Previsão de Pagamento:</span> <span class=\"highlight\">${previsaoPagamento}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Possibilidade de celebrar acordo:</span> <span class=\"value\">${acordo ? '( X ) SIM / ( ) NÃO' : '( ) SIM / ( X ) NÃO'}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Possibilidade de ceder/vender o crédito:</span> <span class=\"value\">${cessao ? '( X ) SIM / ( ) NÃO' : '( ) SIM / ( X ) NÃO'}</span></p>\n    ${rejeitado ? `<div style=\"margin-top: 12px; padding: 10px; background-color: #ffe6e6; border-left: 4px solid #c1121f; border-radius: 4px;\"><p style=\"margin: 0; color: #c1121f; font-weight: bold;\">❌ Motivo da Rejeição</p><p style=\"margin: 6px 0 0 0; color: #666; font-size: 13px;\">${p.motivo_rejeicao || 'Não especificado'}</p><p style=\"margin: 8px 0 0 0; color: #c1121f; font-size: 12px; font-style: italic;\">⚠️ Este precatório não é somado ao valor total do laudo devido à pendência de rejeição.</p></div>` : ''}\n    ${temHerdeiros ? `<div style=\"margin-top: 12px; padding: 10px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;\"><p style=\"margin: 0; color: #856404; font-weight: bold;\">👥 Habilitação de Herdeiros</p>${p.cpf_sucessor ? `<p style=\"margin: 6px 0 0 0; color: #666; font-size: 13px;\"><strong>CPF Sucessor:</strong> ${p.cpf_sucessor}</p>` : ''}</div>` : ''}\n  </div>`;\n});\n\n// === CONCLUSÃO FIXA ===\nconst conclusao_items = `<li style=\"color: #004aad;\"><span style=\"color: #004aad;\">✅</span> Acompanhamento junto ao Tribunal para atualização da previsão de pagamento.</li>\n<li style=\"color: #004aad;\"><span style=\"color: #004aad;\">✅</span> Caso deseje receber de forma mais rápida o precatório, é possível a realização de acordo com o ente devedor ou a venda do precatório.</li>`;\n\nconst html = `<!DOCTYPE html><html lang=\"pt-BR\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title>Laudo Diagnóstico de Precatório</title><style>body{font-family:Arial,sans-serif;color:#222;margin:0;padding:0;background-color:#f5f5f5}.container{max-width:900px;margin:0 auto;padding:40px 20px;background-color:#fff}.header{display:flex;align-items:center;justify-content:center;gap:32px;margin-bottom:20px;padding-bottom:20px;border-bottom:2px solid #e0e0e0}.header-logo{width:88px;height:auto}.header-text{text-align:left}.header-text h1{font-size:22px;letter-spacing:0.5px;margin:0 0 4px 0;color:#000;display:none}.header-text .title-line{font-size:22px;letter-spacing:0.5px;margin:0;color:#000}.subtitle{text-align:left;font-size:14px;color:#666;margin-bottom:32px}h2{color:#444;border-bottom:2px solid #004aad;padding-bottom:6px;margin:32px 0 16px 0;font-size:18px}.section{margin-bottom:32px}.label{font-weight:bold;color:#000}.value{color:#333}.highlight{font-weight:bold;color:#004aad}.ok{color:#2b7a0b;font-weight:bold}.rejected{color:#c1121f;font-weight:bold}.info-box{background-color:#f0f7ff;padding:16px;border-left:4px solid #004aad;border-radius:4px;margin-bottom:24px}.info-box p{margin:6px 0}.anomaly-box{background-color:#ffe6e6;border:2px solid #c1121f;padding:12px;margin-bottom:20px;border-radius:4px}.anomaly-box p{color:#c1121f;font-weight:bold;margin:0}footer{margin-top:48px;padding-top:16px;border-top:1px solid #ddd;font-size:12px;text-align:center;color:#666}</style></head><body><div class=\"container\"><div class=\"header\"><img src=\"${logoUrl}\" alt=\"REVISA PRECATÓRIO\" class=\"header-logo\"><div class=\"header-text\"><h1 style=\"display:none\">&​nbsp;</h1><p class=\"title-line\">LAUDO DIAGNÓSTICO DE PRECATÓRIO</p></div></div>${tem_anomalia ? '<div class=\"anomaly-box\"><p>⚠️ Seus dados foram parcialmente processados, estaremos entrando em contato em algumas horas para prover os dados completos.</p></div>' : ''}<p class=\"subtitle\"><span class=\"label\">Cliente:</span> ${nome_requerente} | <span class=\"label\">CPF:</span> ${cpf} | <span class=\"label\">Data:</span> ${data_atual}</p><div class=\"section\"><h2>📄 INFORMAÇÕES GERAIS</h2><div class=\"info-box\"><p><span class=\"label\">Quantidade de Precatórios:</span> <span class=\"highlight\">${qtd_processos}</span></p><p><span class=\"label\">Varas Responsáveis:</span> ${varas_responsaveis}</p><p><span class=\"label\">Valor Total Corrigido:</span> <span class=\"highlight\">R$ ${formatarMoeda(total_corrigido)}</span></p>${qtd_rejeitados > 0 ? `<p style=\"color:#c1121f;font-size:13px;margin:4px 0;\">⚠️ O valor total acima não contempla o(s) ${qtd_rejeitados} precatório(s) com pendência de rejeição.</p>` : ''}<p><span class=\"label\">Situação Geral:</span> <span class=\"highlight\">${situacao_geral}</span></p>${tem_indicador_prioridade ? `<p><span class=\"label\">Indicadores de Prioridade:</span> <span class=\"highlight\">✓ ${prioridade_texto}</span></p>` : ''}</div></div><div class=\"section\"><h2>📁 DETALHAMENTO DOS PROCESSOS</h2>${processos_html}</div><div class=\"section\"><h2>📌 CONCLUSÃO</h2><p>Com base na análise dos documentos e processos apresentados, recomenda-se:</p><ul style=\"line-height:1.8;list-style:none;padding-left:0\">${conclusao_items}</ul></div><div class=\"section\"><h2>❓ DÚVIDAS E ATENDIMENTO</h2><p>Caso tenha interesse em realizar acordo com o ente devedor, vender o seu Precatório, ou esclarecer dúvidas adicionais sobre o seu Precatório, entre em contato pelo WhatsApp <strong>11-92222-9150</strong>.</p></div><div class=\"section\"><h2>📋 ISENÇÃO DE RESPONSABILIDADE (DISCLAIMER)</h2><ul style=\"font-size:12px;line-height:1.6;\"><li>A Revisa Precatório não é uma empresa jurídica e não presta assessoria jurídica.</li><li>Os cálculos gerados pela Calculadora são meramente informativos e não substituem análises específicas, detalhadas ou técnicas feitas por profissionais especializados ou por órgãos competentes.</li><li>O resultado apresentado depende totalmente dos valores que foram fornecidos e/ou obtidos para os cálculos.</li><li>Cada ente devedor pode adotar critérios próprios para a atualização dos valores. A calculadora não contempla todas as variações normativas ou jurisprudenciais aplicáveis a cada caso concreto ou a cada ente devedor.</li><li>Ao utilizar esta ferramenta, o usuário reconhece e concorda que:<span style=\"display:block;padding-left:16px\">i) O uso da calculadora é de sua inteira responsabilidade.</span><span style=\"display:block;padding-left:16px\">ii) Os resultados não possuem caráter vinculativo ou oficial.</span><span style=\"display:block;padding-left:16px\">iii) Não há qualquer garantia quanto à exatidão, validade jurídica ou adequação dos valores estimados.</span><span style=\"display:block;padding-left:16px\">iv) A Revisa Precatório não poderá ser responsabilizada, direta ou indiretamente, por quaisquer perdas, danos, prejuízos ou demandas decorrentes do uso, interpretação ou confiança depositada nos resultados fornecidos.</span></li><li>Recomenda-se expressamente a consulta com um advogado, contador ou profissional habilitado para a análise individualizada e técnica dos cálculos em questão.</li></ul></div><footer>Gerado em ${data_atual} por <strong>Sistema de Revisão de Precatórios</strong>.<br>Para mais informações, entre em contato com a Revisa Precatório.</footer></div></body></html>`;\n\nreturn [{ json: { cpf, email, nome_requerente, html, qtd_processos, total_corrigido, varas_responsaveis, situacao_geral, tem_indicador_prioridade, prioridade_texto } }];"
+      },
+      "alwaysOutputData": true,
+      "id": "build-html-002",
+      "name": "Build HTML Content",
+      "position": [
+        352,
+        16
+      ],
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "fromEmail": "Revisa Precatório <contato@revisaprecatorio.com.br>",
+        "toEmail": "={{ $json.email }}",
+        "ccEmail": "revisaprecatorio@dr.com",
+        "subject": "={{ 'Laudo Diagnóstico de Precatório – CPF ' + $json.cpf }}",
+        "text": "Segue abaixo o laudo diagnóstico de precatórios.\\n\\nO conteúdo está disponível no corpo do email.",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "send-email-dynamic",
+      "name": "Send Report Email",
+      "position": [
+        512,
+        16
+      ],
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 1,
+      "credentials": {
+        "smtp": {
+          "id": "QhA560IeJvTVywaS",
+          "name": "SMTP revisa"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": true, \"cpf\": $json.cpf, \"email\": $json.email, \"processos\": $json.qtd_processos, \"total\": $json.total_corrigido, \"message\": \"Relatório HTML enviado com sucesso para \" + $json.email } }}",
+        "options": {}
+      },
+      "id": "webhook-response-002",
+      "name": "Webhook Response",
+      "position": [
+        816,
+        16
+      ],
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE consultas_esaj SET current_state = 'FINAL_REPORT_SENT', state_updated_at = NOW() WHERE id = (SELECT id FROM consultas_esaj WHERE cpf = '{{ $('Build HTML Content').item.json.cpf }}' ORDER BY created_at DESC LIMIT 1) RETURNING id, cpf, current_state, state_updated_at",
+        "options": {}
+      },
+      "id": "update-report-status",
+      "name": "Update Report Status",
+      "position": [
+        992,
+        16
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "2BTSz8wFk11X3eBf",
+          "name": "reporte"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO logs (cpf, descricao, processo) VALUES ('{{ $('Build HTML Content').item.json.cpf }}', '📬 Relatório enviado por email', 'n8n');",
+        "options": {}
+      },
+      "id": "log-success-001",
+      "name": "Log Success",
+      "position": [
+        656,
+        16
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "2BTSz8wFk11X3eBf",
+          "name": "reporte"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "e2652ec8-b51e-426d-a072-176c0a28ebd0",
+              "leftValue": "={{ $json.todos_processados }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        16,
+        112
+      ],
+      "id": "20041f68-fb62-4e59-9cd3-63ad81ed7239",
+      "name": "Todos Processados?",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH consulta_alvo AS (\n    SELECT *\n    FROM public.consultas_esaj\n    WHERE cpf = '{{ $json.body.cpf }}'\n      AND email = '{{ $json.body.email }}'\n      AND current_state NOT IN ('REPORT_SENT', 'FINAL_REPORT_SENT')\n    ORDER BY created_at DESC\n    LIMIT 1\n),\nprocessos_esperados AS (\n    SELECT\n        c.id AS consulta_id,\n        c.cpf,\n        c.email,\n        c.retries,\n        c.whatsapp_phone_number,\n        p.value ->> 'numero' AS numero_processo\n    FROM consulta_alvo c\n    CROSS JOIN LATERAL jsonb_array_elements(c.processos -> 'lista') p(value)\n),\nstatus_processos AS (\n    SELECT\n        pe.consulta_id,\n        pe.cpf,\n        pe.email,\n        pe.retries,\n        pe.whatsapp_phone_number,\n        pe.numero_processo,\n        CASE\n            WHEN r.numero_processo_cnj IS NOT NULL THEN 'Processado'\n            WHEN COALESCE(vp.rejeitado, false) = true THEN 'Processado'\n            ELSE 'Não Processado'\n        END AS status_calculo\n    FROM processos_esperados pe\n    LEFT JOIN public.esaj_calc_precatorio_resumo r\n      ON r.numero_processo_cnj = pe.numero_processo\n     AND r.cpf = pe.cpf\n    LEFT JOIN public.vw_precatorios_full vp\n      ON vp.numero_processo_cnj = pe.numero_processo\n     AND vp.cpf = pe.cpf\n)\nSELECT\n    consulta_id,\n    cpf,\n    email,\n    retries,\n    whatsapp_phone_number,\n    COUNT(*) AS total_esperado,\n    COUNT(*) FILTER (WHERE status_calculo = 'Processado') AS total_processado,\n    CASE\n        WHEN COUNT(*) = 0 THEN true\n        ELSE BOOL_AND(status_calculo = 'Processado')\n    END AS todos_processados\nFROM status_processos\nGROUP BY consulta_id, cpf, email, retries, whatsapp_phone_number;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -160,
+        112
+      ],
+      "id": "cc529462-3caf-481c-bfbf-40418924f9d1",
+      "name": "Check Processamento Completo",
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO process_tracking (\n    consulta_id,\n    cpf,\n    whatsapp_phone_number,\n    etapa,\n    evento,\n    retries,\n    concluido,\n    erro,\n    detalhes\n)\nSELECT\n    ce.id,\n    ce.cpf,\n    ce.whatsapp_phone_number,\n    'ENVIO_LAUDO',\n    'LAUDO_ENVIADO',\n    0,\n    true,\n    false,\n    jsonb_build_object(\n        'workflow', 'Laudo envio email+cpf',\n        'node', 'Update Report Status',\n        'email_destino', '{{ $(\"Build HTML Content\").item.json.email }}',\n        'qtd_processos', {{ $(\"Build HTML Content\").item.json.qtd_processos || 0 }}\n    )\nFROM consultas_esaj ce\nWHERE ce.id = {{ $('Update Report Status').item.json.id }};",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1152,
+        16
+      ],
+      "id": "1a259141-bf11-4065-bea8-0c8cd255fe64",
+      "name": "PT Report Enviado",
+      "credentials": {
+        "postgres": {
+          "id": "2BTSz8wFk11X3eBf",
+          "name": "reporte"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO logs (cpf, descricao, processo) VALUES ('{{ $('Build HTML Parcial').item.json.cpf }}', 'PARCIAL e enviado Revisa', 'n8n');",
+        "options": {}
+      },
+      "id": "6206d7b1-d97f-476d-bf1f-210ec1c5cc06",
+      "name": "Log Parcial e Manual",
+      "position": [
+        944,
+        208
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "2BTSz8wFk11X3eBf",
+          "name": "reporte"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE consultas_esaj SET current_state = 'PARTIAL_REPORT_SENT', state_updated_at = NOW() WHERE id = (SELECT id FROM consultas_esaj WHERE cpf = '{{ $('Build HTML Parcial').item.json.cpf }}' ORDER BY created_at DESC LIMIT 1) RETURNING id, cpf, current_state, state_updated_at",
+        "options": {}
+      },
+      "id": "ed0149ac-c14c-4167-8853-b2fe6c149cfa",
+      "name": "Update Partial Report",
+      "position": [
+        1264,
+        208
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "2BTSz8wFk11X3eBf",
+          "name": "reporte"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO process_tracking (\n    consulta_id,\n    cpf,\n    whatsapp_phone_number,\n    etapa,\n    evento,\n    retries,\n    concluido,\n    erro,\n    detalhes\n)\nSELECT\n    ce.id,\n    ce.cpf,\n    ce.whatsapp_phone_number,\n    'LAUDO_PARCIAL',\n    'LAUDO_PARCIAL',\n    0,\n    true,\n    false,\n    jsonb_build_object(\n        'workflow', 'Laudo envio email+cpf',\n        'node', 'Update Partial Report',\n        'email_destino', '{{ $(\"Build HTML Parcial\").item.json.email }}',\n        'qtd_processos', {{ $(\"Build HTML Parcial\").item.json.qtd_processos || 0 }}\n    )\nFROM consultas_esaj ce\nWHERE ce.id = {{ $('Update Partial Report').item.json.id }}\nAND NOT EXISTS (\n    SELECT 1 FROM process_tracking\n    WHERE consulta_id = {{ $('Update Partial Report').item.json.id }}\n    AND etapa = 'LAUDO_PARCIAL'\n);",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1424,
+        208
+      ],
+      "id": "c6af9062-a1ff-4bba-84cf-a460e3842c70",
+      "name": "PT Report  Parcial",
+      "credentials": {
+        "postgres": {
+          "id": "2BTSz8wFk11X3eBf",
+          "name": "reporte"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM public.vw_precatorios_full WHERE cpf = '{{ $(\"Check Processamento Completo\").item.json.cpf }}';",
+        "options": {}
+      },
+      "alwaysOutputData": false,
+      "id": "ebb111bb-477d-40ba-8e6d-e601d2a0fbe3",
+      "name": "Fetch Data for CPF - parcial",
+      "position": [
+        176,
+        208
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Pegar CPF e EMAIL do webhook\nconst cpf = $('Webhook Email + CPF').item.json.body.cpf;\nconst email = $('Webhook Email + CPF').item.json.body.email;\nconst processos = items.map(i => i.json);\n\n// Validar se há dados\nif (!processos || processos.length === 0 || !processos[0].cpf) {\n  throw new Error(`Nenhum dado encontrado para o CPF ${cpf}`);\n}\n\n// === CONSOLIDAÇÃO DE DADOS ===\nconst qtd_processos = processos.length;\n\nconst nome_requerente = (processos[0].credor_nome && processos[0].credor_nome.trim())\n  || (processos[0].nome_requerente && processos[0].nome_requerente.trim())\n  || 'Não informado';\n\nconst data_atual = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });\n\n// Varas distintas\nconst varas = [...new Set(processos.map(p => p.vara).filter(Boolean))];\nconst varas_responsaveis = varas.join(', ') || 'Não informado';\n\n// Total corrigido (apenas processos não rejeitados)\nconst total_corrigido = processos\n  .filter(p => p.rejeitado !== true && p.rejeitado !== 't')\n  .reduce((sum, p) => sum + (parseFloat(p.total_corrigido || 0)), 0);\n\n// === VERIFICAR ANOMALIA ===\nconst tem_anomalia = processos.some(p => p.anomalia === true || p.anomalia === 't');\n\n// === SITUAÇÃO GERAL - VERIFICAR PENDÊNCIAS ===\nconst qtd_rejeitados = processos.filter(p => p.rejeitado === true || p.rejeitado === 't').length;\nconst tem_pendencias = qtd_rejeitados > 0;\nlet situacao_geral = '';\nif (tem_pendencias) {\n  situacao_geral = `⚠️ ${qtd_rejeitados} de ${qtd_processos} precatório(s) apresentam pendências`;\n} else {\n  situacao_geral = '✅ Nenhum precatório apresenta pendências';\n}\n\n// Indicadores de prioridade\nconst idoso = processos[0].idoso === true || processos[0].idoso === 't';\nconst doenca_grave = processos[0].doenca_grave === true || processos[0].doenca_grave === 't';\nconst pcd = processos[0].pcd === true || processos[0].pcd === 't';\nconst preferencial = processos[0].preferencial === true || processos[0].preferencial === 't';\nconst tem_indicador_prioridade = idoso || doenca_grave || pcd;\n\nlet prioridade_tipo = [];\nif (idoso) prioridade_tipo.push('idade');\nif (doenca_grave) prioridade_tipo.push('doença grave');\nif (pcd) prioridade_tipo.push('PCD');\nconst prioridade_texto = prioridade_tipo.join(', ');\n\n// Verificar óbito e habilitação\nconst tem_obito = processos.some(p => p.obito === true || p.obito === 't');\nconst tem_habilitacao = processos.some(p => p.habilitacao_herdeiros === true || p.habilitacao_herdeiros === 't');\n\n// === FALLBACK DE DATA DE NASCIMENTO ===\nconst dobCpf = processos.find(p => p.data_nascimento)?.data_nascimento || null;\n\n// === FUNÇÕES AUXILIARES PARA PREVISÃO ===\nconst parseAnoNumeroOrdem = (numeroOrdem) => {\n  if (!numeroOrdem) return null;\n  const m = numeroOrdem.trim().match(/(\\d{1,6})\\s*\\/\\s*((?:19|20)\\d{2})/);\n  return m ? parseInt(m[2], 10) : null;\n};\n\nconst calcAno61 = (dataNascimento) => {\n  if (!dataNascimento) return null;\n  try {\n    return new Date(dataNascimento).getFullYear() + 61;\n  } catch {\n    return null;\n  }\n};\n\nconst isParcial = (saldoFinal, valorTotalRequisitado) => {\n  const sf = parseFloat(saldoFinal || 0);\n  const vtr = parseFloat(valorTotalRequisitado || 0);\n  return sf > 0 && vtr > 0 && sf < vtr;\n};\n\nconst calcularPrevisaoPagamento = (p) => {\n  const rejeitado = p.rejeitado === true || p.rejeitado === 't';\n  const numeroOrdem = p.numero_ordem || '';\n  const Yord = parseAnoNumeroOrdem(numeroOrdem);\n  const dataNasc = p.data_nascimento || dobCpf;\n  const Y61 = calcAno61(dataNasc);\n  const saldoFinal = parseFloat(p.saldo_final || 0);\n  const valorTotalRequisitado = parseFloat(p.valor_total_requisitado || 0);\n  const parcial = isParcial(saldoFinal, valorTotalRequisitado);\n\n  // Precedência de regras\n  if (rejeitado) {\n    return 'Sem previsão (precatório rejeitado)';\n  }\n  \n  if (!Yord) {\n    return 'Sem previsão de pagamento';\n  }\n  \n  if (parcial) {\n    return `${Yord + 15}`;\n  }\n  \n  // Caso normal\n  if (!idoso) {\n    // Não-idoso: min(Y61, Yord+15)\n    if (Y61) {\n      return `${Math.min(Y61, Yord + 15)}`;\n    } else {\n      return `${Yord + 15}`;\n    }\n  } else {\n    // Idoso\n    if (Y61 && Yord < Y61) {\n      return `${Math.min(Y61, Yord + 15)}`;\n    } else if (Y61 && Yord >= Y61) {\n      return `${Yord + 1}`;\n    } else {\n      return `${Yord + 15}`;\n    }\n  }\n};\n\n// === FORMATAÇÃO DE VALORES ===\nconst formatarMoeda = (valor) => {\n  return parseFloat(valor || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\n};\n\n// === LOGO URL (Imgur hospedado) ===\nconst logoUrl = 'https://i.imgur.com/hqX2yli.jpeg';\n\n// === GERAR HTML DOS PROCESSOS ===\nlet processos_html = '';\n\nprocessos.forEach((p, index) => {\n  const rejeitado = p.rejeitado === true || p.rejeitado === 't';\n  const temNumOrdem = p.numero_ordem && p.numero_ordem.trim() !== '';\n  let status_processo = '';\n  if (rejeitado) {\n    status_processo = '<span class=\"rejected\">❌ Rejeitado</span>';\n  } else if (temNumOrdem) {\n    status_processo = `<span class=\"ok\">✅ Possui número de ordem: ${p.numero_ordem}</span>`;\n  } else {\n    status_processo = '<span class=\"value\">Sem previsão de pagamento</span>';\n  }\n  \n  const temHerdeiros = p.habilitacao_herdeiros === true || p.habilitacao_herdeiros === 't';\n  \n  // Calcular previsão de pagamento\n  const previsaoPagamento = calcularPrevisaoPagamento(p);\n  \n  // Regras SIM/NÃO\n  const acordo = !rejeitado && temNumOrdem;\n  const cessao = !rejeitado && temNumOrdem;\n  \n  processos_html += `\n  <div style=\"margin-bottom: 28px; padding: 16px; border: 1px solid #e0e0e0; border-radius: 4px; background-color: #fafafa;\">\n    <h3 style=\"margin: 0 0 12px 0; color: #333; font-size: 16px;\">📋 Processo ${index + 1}</h3>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Número do Processo:</span> <span class=\"value\">${p.numero_processo_cnj || 'Não informado'}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Número de Ordem:</span> <span class=\"value\">${p.numero_ordem || 'Não informado'}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Vara Responsável:</span> <span class=\"value\">${p.vara || 'Não informado'}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Valor Original:</span> <span class=\"highlight\">R$ ${formatarMoeda(p.valor_principal_bruto)}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Saldo Final:</span> <span class=\"highlight\">R$ ${formatarMoeda(p.saldo_final)}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Valor Atualizado:</span> <span class=\"highlight\">R$ ${formatarMoeda(p.total_corrigido)}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Status:</span> ${status_processo}</p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Previsão de Pagamento:</span> <span class=\"highlight\">${previsaoPagamento}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Possibilidade de celebrar acordo:</span> <span class=\"value\">${acordo ? '( X ) SIM / ( ) NÃO' : '( ) SIM / ( X ) NÃO'}</span></p>\n    <p style=\"margin: 6px 0;\"><span class=\"label\">Possibilidade de ceder/vender o crédito:</span> <span class=\"value\">${cessao ? '( X ) SIM / ( ) NÃO' : '( ) SIM / ( X ) NÃO'}</span></p>\n    ${rejeitado ? `<div style=\"margin-top: 12px; padding: 10px; background-color: #ffe6e6; border-left: 4px solid #c1121f; border-radius: 4px;\"><p style=\"margin: 0; color: #c1121f; font-weight: bold;\">❌ Motivo da Rejeição</p><p style=\"margin: 6px 0 0 0; color: #666; font-size: 13px;\">${p.motivo_rejeicao || 'Não especificado'}</p><p style=\"margin: 8px 0 0 0; color: #c1121f; font-size: 12px; font-style: italic;\">⚠️ Este precatório não é somado ao valor total do laudo devido à pendência de rejeição.</p></div>` : ''}\n    ${temHerdeiros ? `<div style=\"margin-top: 12px; padding: 10px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;\"><p style=\"margin: 0; color: #856404; font-weight: bold;\">👥 Habilitação de Herdeiros</p>${p.cpf_sucessor ? `<p style=\"margin: 6px 0 0 0; color: #666; font-size: 13px;\"><strong>CPF Sucessor:</strong> ${p.cpf_sucessor}</p>` : ''}</div>` : ''}\n  </div>`;\n});\n\n// === CONCLUSÃO FIXA ===\nconst conclusao_items = `<li style=\"color: #004aad;\"><span style=\"color: #004aad;\">✅</span> Acompanhamento junto ao Tribunal para atualização da previsão de pagamento.</li>\n<li style=\"color: #004aad;\"><span style=\"color: #004aad;\">✅</span> Caso deseje receber de forma mais rápida o precatório, é possível a realização de acordo com o ente devedor ou a venda do precatório.</li>`;\n\nconst html = `<!DOCTYPE html><html lang=\"pt-BR\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title>Laudo Diagnóstico de Precatório</title><style>body{font-family:Arial,sans-serif;color:#222;margin:0;padding:0;background-color:#f5f5f5}.container{max-width:900px;margin:0 auto;padding:40px 20px;background-color:#fff}.header{display:flex;align-items:center;justify-content:center;gap:32px;margin-bottom:20px;padding-bottom:20px;border-bottom:2px solid #e0e0e0}.header-logo{width:88px;height:auto}.header-text{text-align:left}.header-text h1{font-size:22px;letter-spacing:0.5px;margin:0 0 4px 0;color:#000;display:none}.header-text .title-line{font-size:22px;letter-spacing:0.5px;margin:0;color:#000}.subtitle{text-align:left;font-size:14px;color:#666;margin-bottom:32px}h2{color:#444;border-bottom:2px solid #004aad;padding-bottom:6px;margin:32px 0 16px 0;font-size:18px}.section{margin-bottom:32px}.label{font-weight:bold;color:#000}.value{color:#333}.highlight{font-weight:bold;color:#004aad}.ok{color:#2b7a0b;font-weight:bold}.rejected{color:#c1121f;font-weight:bold}.info-box{background-color:#f0f7ff;padding:16px;border-left:4px solid #004aad;border-radius:4px;margin-bottom:24px}.info-box p{margin:6px 0}.anomaly-box{background-color:#ffe6e6;border:2px solid #c1121f;padding:12px;margin-bottom:20px;border-radius:4px}.anomaly-box p{color:#c1121f;font-weight:bold;margin:0}footer{margin-top:48px;padding-top:16px;border-top:1px solid #ddd;font-size:12px;text-align:center;color:#666}</style></head><body><div class=\"container\"><div class=\"header\"><img src=\"${logoUrl}\" alt=\"REVISA PRECATÓRIO\" class=\"header-logo\"><div class=\"header-text\"><h1 style=\"display:none\">&​nbsp;</h1><p class=\"title-line\">LAUDO DIAGNÓSTICO DE PRECATÓRIO</p></div></div>${tem_anomalia ? '<div class=\"anomaly-box\"><p>⚠️ Seus dados foram parcialmente processados, estaremos entrando em contato em algumas horas para prover os dados completos.</p></div>' : ''}<p class=\"subtitle\"><span class=\"label\">Cliente:</span> ${nome_requerente} | <span class=\"label\">CPF:</span> ${cpf} | <span class=\"label\">Data:</span> ${data_atual}</p><div class=\"section\"><h2>📄 INFORMAÇÕES GERAIS</h2><div class=\"info-box\"><p><span class=\"label\">Quantidade de Precatórios:</span> <span class=\"highlight\">${qtd_processos}</span></p><p><span class=\"label\">Varas Responsáveis:</span> ${varas_responsaveis}</p><p><span class=\"label\">Valor Total Corrigido:</span> <span class=\"highlight\">R$ ${formatarMoeda(total_corrigido)}</span></p>${qtd_rejeitados > 0 ? `<p style=\"color:#c1121f;font-size:13px;margin:4px 0;\">⚠️ O valor total acima não contempla o(s) ${qtd_rejeitados} precatório(s) com pendência de rejeição.</p>` : ''}<p><span class=\"label\">Situação Geral:</span> <span class=\"highlight\">${situacao_geral}</span></p>${tem_indicador_prioridade ? `<p><span class=\"label\">Indicadores de Prioridade:</span> <span class=\"highlight\">✓ ${prioridade_texto}</span></p>` : ''}</div></div><div class=\"section\"><h2>📁 DETALHAMENTO DOS PROCESSOS</h2>${processos_html}</div><div class=\"section\"><h2>📌 CONCLUSÃO</h2><p>Com base na análise dos documentos e processos apresentados, recomenda-se:</p><ul style=\"line-height:1.8;list-style:none;padding-left:0\">${conclusao_items}</ul></div><div class=\"section\"><h2>❓ DÚVIDAS E ATENDIMENTO</h2><p>Caso tenha interesse em realizar acordo com o ente devedor, vender o seu Precatório, ou esclarecer dúvidas adicionais sobre o seu Precatório, entre em contato pelo WhatsApp <strong>11-92222-9150</strong>.</p></div><div class=\"section\"><h2>📋 ISENÇÃO DE RESPONSABILIDADE (DISCLAIMER)</h2><ul style=\"font-size:12px;line-height:1.6;\"><li>A Revisa Precatório não é uma empresa jurídica e não presta assessoria jurídica.</li><li>Os cálculos gerados pela Calculadora são meramente informativos e não substituem análises específicas, detalhadas ou técnicas feitas por profissionais especializados ou por órgãos competentes.</li><li>O resultado apresentado depende totalmente dos valores que foram fornecidos e/ou obtidos para os cálculos.</li><li>Cada ente devedor pode adotar critérios próprios para a atualização dos valores. A calculadora não contempla todas as variações normativas ou jurisprudenciais aplicáveis a cada caso concreto ou a cada ente devedor.</li><li>Ao utilizar esta ferramenta, o usuário reconhece e concorda que:<span style=\"display:block;padding-left:16px\">i) O uso da calculadora é de sua inteira responsabilidade.</span><span style=\"display:block;padding-left:16px\">ii) Os resultados não possuem caráter vinculativo ou oficial.</span><span style=\"display:block;padding-left:16px\">iii) Não há qualquer garantia quanto à exatidão, validade jurídica ou adequação dos valores estimados.</span><span style=\"display:block;padding-left:16px\">iv) A Revisa Precatório não poderá ser responsabilizada, direta ou indiretamente, por quaisquer perdas, danos, prejuízos ou demandas decorrentes do uso, interpretação ou confiança depositada nos resultados fornecidos.</span></li><li>Recomenda-se expressamente a consulta com um advogado, contador ou profissional habilitado para a análise individualizada e técnica dos cálculos em questão.</li></ul></div><footer>Gerado em ${data_atual} por <strong>Sistema de Revisão de Precatórios</strong>.<br>Para mais informações, entre em contato com a Revisa Precatório.</footer></div></body></html>`;\n\nconst whatsapp_phone_number = processos[0].whatsapp_phone_number || '';\nreturn [{ json: { cpf, email, nome_requerente, whatsapp_phone_number, html, qtd_processos, total_corrigido, varas_responsaveis, situacao_geral, tem_indicador_prioridade, prioridade_texto } }];"
+      },
+      "alwaysOutputData": true,
+      "id": "8f70b62a-2b00-469a-8889-bbced92c34c4",
+      "name": "Build HTML Parcial",
+      "position": [
+        352,
+        208
+      ],
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "fromEmail": "Revisa Precatório <contato@revisaprecatorio.com.br>",
+        "toEmail": "contato@revisaprecatorio.com.br",
+        "ccEmail": "revisaprecatorio@dr.com",
+        "subject": "={{ 'Laudo Diagnóstico Parcial – CPF ' + $('Build HTML Parcial').item.json.cpf }}",
+        "text": "Segue abaixo o laudo diagnóstico de precatórios.\\n\\nO conteúdo está disponível no corpo do email.",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "ba41785c-8b0c-47ab-8806-a7322824b366",
+      "name": "Send Report Revisa",
+      "position": [
+        512,
+        208
+      ],
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 1,
+      "credentials": {
+        "smtp": {
+          "id": "QhA560IeJvTVywaS",
+          "name": "SMTP revisa"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": true, \"cpf\": $json.cpf, \"email\": $json.email, \"processos\": $json.qtd_processos, \"total\": $json.total_corrigido, \"message\": \"Relatório HTML enviado com sucesso para \" + $json.email } }}",
+        "options": {}
+      },
+      "id": "9fdb8c71-f40c-47b0-a140-37f303139404",
+      "name": "Webhook Response Parcial",
+      "position": [
+        1104,
+        208
+      ],
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "772929385904854",
+        "recipientPhoneNumber": "={{ $('Build HTML Parcial').item.json.whatsapp_phone_number }}",
+        "textBody": "={{ 'Prezado Sr(a) ' + $('Build HTML Parcial').item.json.nome_requerente + ',\\n\\nRecebemos a sua solicitação e informamos que, devido a uma instabilidade do sistema do Tribunal de Justiça do Estado de São Paulo, o seu laudo diagnóstico de precatório será enviado em até 7 (sete) dias úteis.\\n\\nContamos com a sua compreensão e agradecemos o contato.\\n\\nAtenciosamente,\\nRevisa Precatório' }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        784,
+        208
+      ],
+      "id": "5a4d6e17-ee53-47d9-b410-dc9849fafbdc",
+      "name": "Whatsapp Parcial",
+      "webhookId": "b3e34772-6743-46cf-bc4c-56e245898954",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "ejhZtEKHF0Kh9HeQ",
+          "name": "WhatsApp account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "739d6bdc-a696-4996-b68e-5fb183ffdea5",
+              "name": "whatsapp_phone_number",
+              "value": "={{ $('Build HTML Parcial').item.json.whatsapp_phone_number }}",
+              "type": "string"
+            },
+            {
+              "id": "9fb93d95-0665-4b21-a3c1-a5a4eda8393b",
+              "name": "nome_requerente",
+              "value": "={{ $('Build HTML Parcial').item.json.nome_requerente }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        640,
+        208
+      ],
+      "id": "3f9e5be9-476a-4770-a216-6a15309845f5",
+      "name": "phone e nome"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Build HTML Content": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Send Report Email",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Fetch Data for CPF": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Build HTML Content",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Log Success": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Webhook Response",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Send Report Email": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Log Success",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Webhook Email + CPF": {
+      "main": [
+        [
+          {
+            "node": "Check Processamento Completo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Response": {
+      "main": [
+        [
+          {
+            "index": 0,
+            "node": "Update Report Status",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "Update Report Status": {
+      "main": [
+        [
+          {
+            "node": "PT Report Enviado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Todos Processados?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Data for CPF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Data for CPF - parcial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Processamento Completo": {
+      "main": [
+        [
+          {
+            "node": "Todos Processados?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Parcial e Manual": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response Parcial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Partial Report": {
+      "main": [
+        [
+          {
+            "node": "PT Report  Parcial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Data for CPF - parcial": {
+      "main": [
+        [
+          {
+            "node": "Build HTML Parcial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTML Parcial": {
+      "main": [
+        [
+          {
+            "node": "Send Report Revisa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Report Revisa": {
+      "main": [
+        [
+          {
+            "node": "phone e nome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Response Parcial": {
+      "main": [
+        [
+          {
+            "node": "Update Partial Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Whatsapp Parcial": {
+      "main": [
+        [
+          {
+            "node": "Log Parcial e Manual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "phone e nome": {
+      "main": [
+        [
+          {
+            "node": "Whatsapp Parcial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "345a35b4-8169-4e39-ae2f-1d8f536775c9",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "987849d7ed7aff758690b6a5c22582879580ea3a6254650b3e67b60c78c6eed3"
+  },
+  "id": "UrxjrcPE2C7WTLa0",
+  "tags": []
+}

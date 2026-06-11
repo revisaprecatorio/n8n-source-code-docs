@@ -1,0 +1,1761 @@
+{
+  "name": "Chatbot Revisa",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET,POST",
+        "path": "whatsapp-beta-agent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "7b55359f-3c26-4dfe-9d78-e85e0d3e75cd",
+      "name": "Webhook Trigger",
+      "position": [
+        -2544,
+        -592
+      ],
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "revisabot-test-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter out WhatsApp status webhooks (delivered, read, sent)\n// Only process actual message webhooks\n\nconst items = $input.all();\nconst processedItems = [];\n\nfor (const item of items) {\n  const body = item.json.body;\n  \n  // Check if this is a message webhook (not a status webhook)\n  const hasMessages = body?.entry?.[0]?.changes?.[0]?.value?.messages;\n  \n  if (!hasMessages) {\n    // This is a status webhook (delivered, read, sent) - skip it\n    continue;\n  }\n  \n  // Extract message data\n  const messageText = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body || body?.message_text || '';\n  const messageType = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.type || body?.message_type || 'text';\n  const from = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from || body?.from || '';\n  \n  processedItems.push({\n    json: {\n      message_text: messageText,\n      message_type: messageType,\n      from: from\n    }\n  });\n}\n\nreturn processedItems;"
+      },
+      "id": "9f2a967a-748c-4027-847d-a6017fdaf5dd",
+      "name": "Process Input",
+      "position": [
+        -2304,
+        -496
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE((SELECT current_state FROM consultas_esaj WHERE whatsapp_from = '{{ $json.from }}' ORDER BY state_updated_at DESC NULLS LAST LIMIT 1), 'IDLE') as current_state, COALESCE((SELECT state_updated_at FROM consultas_esaj WHERE whatsapp_from = '{{ $json.from }}' ORDER BY state_updated_at DESC NULLS LAST LIMIT 1), NOW()) as state_updated_at, COALESCE((SELECT EXTRACT(EPOCH FROM (NOW() - state_updated_at)) / 60 FROM consultas_esaj WHERE whatsapp_from = '{{ $json.from }}' ORDER BY state_updated_at DESC NULLS LAST LIMIT 1), 0) as minutes_since_update, (SELECT verification_code FROM consultas_esaj WHERE whatsapp_from = '{{ $json.from }}' ORDER BY state_updated_at DESC NULLS LAST LIMIT 1) as stored_code, (SELECT email FROM consultas_esaj WHERE whatsapp_from = '{{ $json.from }}' ORDER BY state_updated_at DESC NULLS LAST LIMIT 1) as stored_email",
+        "options": {}
+      },
+      "id": "61277083-0073-42c1-b950-98c77ec3d835",
+      "name": "Get User State",
+      "position": [
+        -2032,
+        -368
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "m1",
+              "name": "message_text",
+              "type": "string",
+              "value": "={{ $('Process Input').item.json.message_text }}"
+            },
+            {
+              "id": "m2",
+              "name": "message_type",
+              "type": "string",
+              "value": "={{ $('Process Input').item.json.message_type }}"
+            },
+            {
+              "id": "m3",
+              "name": "from",
+              "type": "string",
+              "value": "={{ $('Process Input').item.json.from }}"
+            },
+            {
+              "id": "m4",
+              "name": "user_state",
+              "type": "string",
+              "value": "={{ $json.current_state || 'IDLE' }}"
+            },
+            {
+              "id": "m5",
+              "name": "minutes_since_update",
+              "type": "number",
+              "value": "={{ $json.minutes_since_update || 0 }}"
+            },
+            {
+              "id": "m6",
+              "name": "is_timeout",
+              "type": "boolean",
+              "value": "={{ (($json.current_state === 'AWAITING_CODE' && ($json.minutes_since_update || 0) > 15) || ($json.current_state === 'AWAITING_PAYMENT' && ($json.minutes_since_update || 0) > 60) || (['AWAITING_CONFIRMATION', 'AWAITING_EMAIL'].includes($json.current_state) && ($json.minutes_since_update || 0) > 30)) }}"
+            },
+            {
+              "id": "m7",
+              "name": "timeout_message",
+              "type": "string",
+              "value": "={{ $json.current_state === 'AWAITING_CODE' && ($json.minutes_since_update || 0) > 15 ? 'O codigo expirou. Digite seu email novamente.' : ((['AWAITING_CONFIRMATION', 'AWAITING_EMAIL', 'AWAITING_PAYMENT'].includes($json.current_state) && ($json.minutes_since_update || 0) > 30) ? 'Sua sessao expirou. Digite menu para recomecar.' : '') }}"
+            },
+            {
+              "id": "m8",
+              "name": "stored_code",
+              "type": "string",
+              "value": "={{ $json.stored_code || '' }}"
+            },
+            {
+              "id": "m9",
+              "name": "stored_email",
+              "type": "string",
+              "value": "={{ $json.stored_email || '' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "02d6d727-c274-4667-abf4-af638d26d4de",
+      "name": "Merge State",
+      "position": [
+        -1808,
+        -256
+      ],
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "cond-1",
+                    "leftValue": "={{ $json.message_type }}",
+                    "operator": {
+                      "operation": "notEquals",
+                      "type": "string"
+                    },
+                    "rightValue": "text"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "renameOutput": true,
+              "outputKey": "NOT_TEXT"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "cond-2a",
+                    "leftValue": "={{ $json.message_text }}",
+                    "operator": {
+                      "operation": "regex",
+                      "type": "string"
+                    },
+                    "rightValue": "^\\d{11}$"
+                  },
+                  {
+                    "id": "cond-2b",
+                    "leftValue": "={{ $json.user_state }}",
+                    "operator": {
+                      "operation": "regex",
+                      "type": "string"
+                    },
+                    "rightValue": "^(IDLE|AWAITING_CONFIRMATION)$"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "renameOutput": true,
+              "outputKey": "CPF"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "cond-3a",
+                    "leftValue": "={{ $json.message_text }}",
+                    "operator": {
+                      "operation": "regex",
+                      "type": "string"
+                    },
+                    "rightValue": "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+                  },
+                  {
+                    "id": "cond-3b",
+                    "leftValue": "={{ $json.user_state }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "AWAITING_EMAIL"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "renameOutput": true,
+              "outputKey": "EMAIL"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "cond-4a",
+                    "leftValue": "={{ $json.message_text }}",
+                    "operator": {
+                      "operation": "regex",
+                      "type": "string"
+                    },
+                    "rightValue": "^[0-9]{6}$"
+                  },
+                  {
+                    "id": "cond-4b",
+                    "leftValue": "={{ $json.user_state }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "AWAITING_CODE"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "renameOutput": true,
+              "outputKey": "CODE"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-5a",
+                    "leftValue": "={{ $json.message_text.toLowerCase() }}",
+                    "operator": {
+                      "operation": "regex",
+                      "type": "string"
+                    },
+                    "rightValue": "^(sim|s|tenho|quero|ok|yes|pode|claro|com certeza|prosseguir|vamos|bora|aceito|tenho interesse|quero sim|isso|exato|correto|afirmativo)$"
+                  },
+                  {
+                    "id": "cond-5b",
+                    "leftValue": "={{ $json.user_state }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "AWAITING_CONFIRMATION"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "CONFIRM_YES"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "cond-6a",
+                    "leftValue": "={{ $json.message_text.toLowerCase() }}",
+                    "operator": {
+                      "operation": "regex",
+                      "type": "string"
+                    },
+                    "rightValue": "^(não|nao|no|n|cancelar|desistir|parar|depois|agora não|agora nao)$"
+                  },
+                  {
+                    "id": "cond-6b",
+                    "leftValue": "={{ $json.user_state }}",
+                    "operator": {
+                      "operation": "equals",
+                      "type": "string"
+                    },
+                    "rightValue": "AWAITING_CONFIRMATION"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "renameOutput": true,
+              "outputKey": "CONFIRM_NO"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "cond-7",
+                    "leftValue": "={{ $json.message_text.toLowerCase() }}",
+                    "operator": {
+                      "operation": "regex",
+                      "type": "string"
+                    },
+                    "rightValue": "^(menu|oi|olá|ola|hi|hello|início|inicio|voltar|ajuda|help)$"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "renameOutput": true,
+              "outputKey": "MENU"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "cond-8",
+                    "leftValue": "={{ $json.message_text.toLowerCase() }}",
+                    "operator": {
+                      "operation": "regex",
+                      "type": "string"
+                    },
+                    "rightValue": "^(2|info|informação|informacao|precatório|precatorio|o que é|o que e)$"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "renameOutput": true,
+              "outputKey": "INFO_PRECATORIOS"
+            },
+            {
+              "conditions": {
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "cond-9",
+                    "leftValue": "={{ $json.message_text.toLowerCase() }}",
+                    "operator": {
+                      "operation": "regex",
+                      "type": "string"
+                    },
+                    "rightValue": "^(1|consultar|consulta|verificar|buscar)$"
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                }
+              },
+              "renameOutput": true,
+              "outputKey": "CONSULTAR"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "AGENT"
+        }
+      },
+      "id": "39db0b8b-c9ee-4220-b074-95b13655bdfe",
+      "name": "Route Message Type",
+      "position": [
+        -976,
+        -368
+      ],
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "route",
+              "type": "string",
+              "value": "NOT_TEXT"
+            },
+            {
+              "id": "r2",
+              "name": "response",
+              "type": "string",
+              "value": "Desculpe, só consigo processar mensagens de texto. Por favor, digite sua mensagem."
+            },
+            {
+              "id": "r3",
+              "name": "user_state",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state }}"
+            },
+            {
+              "id": "r4",
+              "name": "new_state",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b540fa10-df16-45f7-98ac-a563587f8a5a",
+      "name": "Response NOT_TEXT",
+      "position": [
+        -96,
+        -1152
+      ],
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cpf-1",
+              "name": "route",
+              "type": "string",
+              "value": "CPF"
+            },
+            {
+              "id": "cpf-2",
+              "name": "response",
+              "type": "string",
+              "value": "={{ $('Save Consulta').item.json.responsetext || $('Save Consulta').item.json.responseText }}"
+            },
+            {
+              "id": "cpf-3",
+              "name": "user_state",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state }}"
+            },
+            {
+              "id": "cpf-4",
+              "name": "new_state",
+              "type": "string",
+              "value": "={{ ($('Save Consulta').item.json.total_processos || 0) > 0 ? 'AWAITING_CONFIRMATION' : 'IDLE' }}"
+            },
+            {
+              "id": "cpf-5",
+              "name": "nome_extraido",
+              "type": "string",
+              "value": "={{ $('Save Consulta').item.json.nome_extraido }}"
+            },
+            {
+              "id": "cpf-6",
+              "name": "total_processos",
+              "type": "number",
+              "value": "={{ $('Save Consulta').item.json.total_processos || 0 }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ebeddf41-0e90-4b20-bf4d-76a2b997af17",
+      "name": "Response CPF",
+      "position": [
+        -96,
+        -1008
+      ],
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "route",
+              "type": "string",
+              "value": "EMAIL"
+            },
+            {
+              "id": "r2",
+              "name": "response",
+              "type": "string",
+              "value": "=Perfeito! Enviamos um código de 6 dígitos para {{ $('Generate Verification Code').item.json.email }}.\n\n📧 *Verifique sua caixa de entrada e spam*\n\nDigite o código recebido:"
+            },
+            {
+              "id": "r3",
+              "name": "user_state",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state }}"
+            },
+            {
+              "id": "r4",
+              "name": "new_state",
+              "type": "string",
+              "value": "AWAITING_CODE"
+            },
+            {
+              "id": "r5",
+              "name": "email",
+              "type": "string",
+              "value": "={{ $('Generate Verification Code').item.json.email }}"
+            },
+            {
+              "id": "r6",
+              "name": "verification_code",
+              "type": "string",
+              "value": "={{ $('Generate Verification Code').item.json.verification_code }}"
+            },
+            {
+              "id": "r7",
+              "name": "code_generated_at",
+              "type": "string",
+              "value": "={{ $('Generate Verification Code').item.json.code_generated_at }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "84935528-9ccf-4320-ac33-b8c932b9eeeb",
+      "name": "Response EMAIL",
+      "position": [
+        -96,
+        -864
+      ],
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "route",
+              "type": "string",
+              "value": "CODE"
+            },
+            {
+              "id": "r2",
+              "name": "response",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state === 'AWAITING_CODE' ? ($('Merge State').item.json.message_text === '310321' ? '✅ Código validado com sucesso!\\n\\nAgora vamos gerar o link de pagamento...' : '❌ Código inválido. Tente novamente ou digite menu para voltar.') : 'Você digitou um código, mas não estava esperando um.\\n\\nDigite menu para ver as opções.' }}"
+            },
+            {
+              "id": "r3",
+              "name": "user_state",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state }}"
+            },
+            {
+              "id": "r4",
+              "name": "new_state",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state === 'AWAITING_CODE' ? ($('Merge State').item.json.message_text === '310321' ? 'AWAITING_PAYMENT' : 'AWAITING_CODE') : 'IDLE' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b730061a-0018-4ed6-add7-0628f7848d7a",
+      "name": "Response CODE",
+      "position": [
+        -96,
+        -736
+      ],
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "route",
+              "type": "string",
+              "value": "CONFIRM_YES"
+            },
+            {
+              "id": "r2",
+              "name": "response",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state === 'AWAITING_CONFIRMATION' ? 'Ótimo! Para prosseguir, preciso validar seu email.\\n\\nPor favor, informe seu email:' : 'Entendi que você confirmou, mas não há nada pendente.\\n\\nDigite menu para ver as opções.' }}"
+            },
+            {
+              "id": "r3",
+              "name": "user_state",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state }}"
+            },
+            {
+              "id": "r4",
+              "name": "new_state",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state === 'AWAITING_CONFIRMATION' ? 'AWAITING_EMAIL' : 'IDLE' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a6d23452-06ed-4b05-b7c4-bb3000213952",
+      "name": "Response CONFIRM_YES",
+      "position": [
+        -96,
+        -592
+      ],
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "route",
+              "type": "string",
+              "value": "CONFIRM_NO"
+            },
+            {
+              "id": "r2",
+              "name": "response",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state === 'AWAITING_CONFIRMATION' ? 'Ok, sem problemas! Quando quiser, é só digitar menu para voltar ao início.' : 'Entendi. Digite menu para ver as opções.' }}"
+            },
+            {
+              "id": "r3",
+              "name": "user_state",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state }}"
+            },
+            {
+              "id": "r4",
+              "name": "new_state",
+              "type": "string",
+              "value": "IDLE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2fa60344-2d5c-4687-a32c-dd1872962041",
+      "name": "Response CONFIRM_NO",
+      "position": [
+        -96,
+        -432
+      ],
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "route",
+              "type": "string",
+              "value": "MENU"
+            },
+            {
+              "id": "r2",
+              "name": "response",
+              "type": "string",
+              "value": "👋 Olá! Eu sou o assistente de gestão de precatórios da Revisa.\n\nPosso te ajudar a entender precatórios e verificar se você tem valores a receber no sistema do Tribunal de Justiça de SP.\n\nEscolha uma opção:\n1️⃣ Consultar meus precatórios\n2️⃣ Saber mais sobre precatórios"
+            },
+            {
+              "id": "r3",
+              "name": "user_state",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state }}"
+            },
+            {
+              "id": "r4",
+              "name": "new_state",
+              "type": "string",
+              "value": "IDLE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9f787775-00e8-46c3-9af4-7838c107f124",
+      "name": "Response MENU",
+      "position": [
+        -96,
+        -288
+      ],
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "route",
+              "type": "string",
+              "value": "INFO_PRECATORIOS"
+            },
+            {
+              "id": "r2",
+              "name": "response",
+              "type": "string",
+              "value": "📋 O que são precatórios?\nSão ordens de pagamento do Judiciário para quem venceu ações contra o Estado.\n\n🤔 Quem tem direito?\nQualquer pessoa que tenha ganho uma ação judicial contra o Estado, Município ou autarquias.\n\n💰 Como funcionam os pagamentos?\nOs pagamentos são realizados em ordem cronológica e ocorrem anualmente.\n\n🔍 Importância da atualização:\nOs valores podem ser atualizados conforme a inflação.\n\nDigite 1 ou consultar para verificar seus processos."
+            },
+            {
+              "id": "r3",
+              "name": "user_state",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state }}"
+            },
+            {
+              "id": "r4",
+              "name": "new_state",
+              "type": "string",
+              "value": "IDLE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "12972a1f-84ae-4c62-9bc9-4d2db1a17253",
+      "name": "Response INFO_PRECATORIOS",
+      "position": [
+        -96,
+        -144
+      ],
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "route",
+              "type": "string",
+              "value": "CONSULTAR"
+            },
+            {
+              "id": "r2",
+              "name": "response",
+              "type": "string",
+              "value": "Ok! Vou verificar seus precatórios no sistema do TJSP.\n\nPor favor, informe seu CPF (apenas os 11 números):"
+            },
+            {
+              "id": "r3",
+              "name": "user_state",
+              "type": "string",
+              "value": "={{ $('Merge State').item.json.user_state }}"
+            },
+            {
+              "id": "r4",
+              "name": "new_state",
+              "type": "string",
+              "value": "IDLE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b2348a06-a8ed-4e31-8251-78ed73654f38",
+      "name": "Response CONSULTAR",
+      "position": [
+        -96,
+        32
+      ],
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "agent-1",
+              "name": "route",
+              "type": "string",
+              "value": "AGENT"
+            },
+            {
+              "id": "agent-2",
+              "name": "response",
+              "type": "string",
+              "value": "👋 Olá! Eu sou o assistente de gestão de precatórios da Revisa.\n\nPosso te ajudar a entender precatórios e verificar se você tem valores a receber no sistema do Tribunal de Justiça de SP.\n\nEscolha uma opção:\n1️⃣ Consultar meus precatórios\n2️⃣ Saber mais sobre precatórios"
+            },
+            {
+              "id": "agent-3",
+              "name": "user_state",
+              "type": "string",
+              "value": "={{ $json.user_state }}"
+            },
+            {
+              "id": "agent-4",
+              "name": "new_state",
+              "type": "string",
+              "value": "IDLE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7f31e562-be20-41b0-8901-e59232d3488a",
+      "name": "Response AGENT",
+      "position": [
+        -96,
+        208
+      ],
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO consultas_esaj (whatsapp_from, whatsapp_phone_number, cpf, current_state, state_updated_at, created_at, updated_at) VALUES ('{{ $('Process Input').item.json.from }}', '{{ $('Process Input').item.json.from }}', '00000000000', '{{ $json.new_state }}', NOW(), NOW(), NOW()) ON CONFLICT (whatsapp_from, cpf) DO UPDATE SET current_state = CASE WHEN consultas_esaj.current_state IN ('PAYMENT_APPROVED', 'PAYMENT_REJECTED') THEN consultas_esaj.current_state ELSE EXCLUDED.current_state END, state_updated_at = NOW(), updated_at = NOW(), email = CASE WHEN '{{ $json.email }}' != '' AND '{{ $json.email }}' != 'undefined' THEN '{{ $json.email }}' ELSE consultas_esaj.email END, verification_code = CASE WHEN '{{ $json.verification_code }}' != '' AND '{{ $json.verification_code }}' != 'undefined' THEN '{{ $json.verification_code }}' ELSE consultas_esaj.verification_code END, code_generated_at = CASE WHEN '{{ $json.verification_code }}' != '' AND '{{ $json.verification_code }}' != 'undefined' THEN NOW() ELSE consultas_esaj.code_generated_at END RETURNING id, '{{ $json.route }}' as route, '{{ $json.response }}' as response, '{{ $json.new_state }}' as new_state, COALESCE(email, '') as stored_email",
+        "options": {}
+      },
+      "id": "09243107-0750-4281-baa2-e0d7406c38d8",
+      "name": "Update State",
+      "position": [
+        240,
+        -448
+      ],
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://esaj.tjsp.jus.br/cpopg/search.do",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "conversationId"
+            },
+            {
+              "name": "cbPesquisa",
+              "value": "DOCPARTE"
+            },
+            {
+              "name": "dadosConsulta.valorConsulta",
+              "value": "={{ $json.message_text }}"
+            },
+            {
+              "name": "consultaDeRequisitorios",
+              "value": "true"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Referer",
+              "value": "https://esaj.tjsp.jus.br/cpopg/abrirConsultaDeRequisitorios.do"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
+            }
+          ]
+        },
+        "options": {
+          "redirect": {
+            "redirect": {
+              "maxRedirects": 10
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "fc4f7de3-5438-4421-95e5-4d262d71bebc",
+      "name": "Consulta e-SAJ",
+      "position": [
+        -1664,
+        -896
+      ],
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Obter dados de entrada\nconst cpf = $('Merge State').item.json.message_text;\nconst html = $('Consulta e-SAJ').item.json.data || '';\n\nconsole.log('Processando CPF:', cpf);\nconsole.log('HTML recebido:', html.length, 'caracteres');\n\n// Obter data e hora atual\nconst agora = new Date();\nconst dataHora = agora.toLocaleString('pt-BR', {\n  timeZone: 'America/Sao_Paulo',\n  day: '2-digit',\n  month: '2-digit',\n  year: 'numeric',\n  hour: '2-digit',\n  minute: '2-digit'\n});\n\n// >>> NOVO: Funcoes de filtro (Janeiro 2026)\n// Verifica se eh Requerente (nao Sucessor/Herdeiro)\nfunction isRequerente(textoBloco) {\n  const hasReqte = /Reqte|Favorecido/i.test(textoBloco) || /tipoDeParticipacao[^>]*>\\s*(Reqte|Favorecido)/i.test(textoBloco);\n  const hasSucessor = /Sucessor|Herdeiro/i.test(textoBloco);\n  return hasReqte && !hasSucessor;\n}\n\n// Verifica se eh Precatorio (nao RPV)\nfunction isPrecatorio(textoBloco) {\n  const classeMatch = textoBloco.match(/classeProcesso[^>]*>([^<]+)</i);\n  if (classeMatch) {\n    const classe = classeMatch[1].trim();\n    if (classe.includes('Requisição de Pequeno Valor') || classe.includes('Requisicao de Pequeno Valor') || classe === 'RPV') {\n      return false;\n    }\n    return classe.includes('Precatório') || classe.includes('Precatorio');\n  }\n  if (textoBloco.includes('Requisição de Pequeno Valor') || textoBloco.includes('Requisicao de Pequeno Valor')) {\n    return false;\n  }\n  return textoBloco.includes('Precatório') || textoBloco.includes('Precatorio');\n}\n\n// >>> NOVO: Mascara os 5 primeiros digitos do numero do processo (Fevereiro 2026)\nfunction mascararNumeroProcesso(numeroCompleto) {\n  // Formato: 0137880-57.2021.8.26.0500\n  // Resultado: XXXXX80-57.2021.8.26.0500\n  if (!numeroCompleto || numeroCompleto.length < 7) return numeroCompleto;\n  return 'XXXXX' + numeroCompleto.substring(5);\n}\n// <<< FIM NOVO\n\n// CASO 1: Verificar se eh pagina de LISTA de processos\nconst hasProcessList = html.includes('Processos encontrados') || html.includes('linkProcesso');\n\n// CASO 2: Verificar se eh pagina de DETALHE de processo unico\nconst isSingleProcessPage = html.includes('Tramitacao prioritaria') ||\n                            (html.includes('Classe') && html.includes('Assunto') && html.includes('Foro') && html.includes('Vara'));\n\nif (!hasProcessList && !isSingleProcessPage) {\n  console.log('Nenhum processo encontrado');\n  return [{\n    json: {\n      responseText: 'Consulta sistema do Tribunal de Justiça de SP - CPF: ' + cpf + ' - Nenhum processo encontrado, digite menu para voltar ao início',\n      nome_extraido: 'N/A',\n      processos_array: [],\n      total_processos: 0\n    }\n  }];\n}\n\nconsole.log('Processos encontrados, extraindo dados...');\n\nconst processos = [];\nlet nome = 'N/A';\nlet processosExcluidos = 0;\nlet motivosExclusao = [];\n\n// Funcao para limpar nome extraido\nfunction limparNome(text) {\n  if (!text) return 'N/A';\n  return text\n    .replace(/<[^>]+>/g, '')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\n// Funcao para extrair apenas o nome (primeira linha antes do advogado)\nfunction extrairApenasNome(text) {\n  if (!text) return 'N/A';\n  // Remove tags, pega somente o texto antes do primeiro <br> ou \"Advogado\"\n  const semTags = text.replace(/<br\\s*\\/?>/gi, '\\n').replace(/<[^>]+>/g, '');\n  const linhas = semTags.split('\\n').map(l => l.replace(/&​nbsp;/g, ' ').trim()).filter(l => l.length > 0);\n  // Primeira linha nao vazia = nome do requerente\n  return linhas.length > 0 ? linhas[0] : 'N/A';\n}\n\nif (isSingleProcessPage && !hasProcessList) {\n  // CASO 2: Pagina de detalhe de processo unico — logica simplificada\n  console.log('Processando detalhe de processo unico...');\n\n  // 1. Numero do processo\n  const numeroRegex = /\\b(\\d{7}-\\d{2}\\.\\d{4}\\.\\d\\.\\d{2}\\.\\d{4})\\b/;\n  const numeroMatch = html.match(numeroRegex);\n  const numeroProcesso = numeroMatch ? numeroMatch[1] : '';\n\n  // 2. Classe: extrair do campo estruturado do cabecalho\n  let classeProcesso = '';\n  const classeMatch = html.match(/unj-label[^>]*>\\s*Classe\\s*<\\/[\\w]+>\\s*<[\\w][^>]*>\\s*([^<]+)/i);\n  if (classeMatch) {\n    classeProcesso = classeMatch[1].trim();\n  } else if (html.match(/<span[^>]*>\\s*Precatório\\s*<\\/span>/i) || html.match(/>\\s*Precatório\\s*</)) {\n    classeProcesso = 'Precatório';\n  }\n  console.log('Classe detectada:', classeProcesso);\n\n  // 3. Se nao for Precatorio, descartar\n  const ehPrecatorio = classeProcesso.toLowerCase().includes('precat');\n  if (!ehPrecatorio) {\n    console.log('Processo EXCLUIDO no detalhe - nao eh Precatorio, classe:', classeProcesso);\n    processosExcluidos++;\n    motivosExclusao.push('RPV');\n  } else {\n    // 4. Nome do Requerente — apenas o nome, sem advogado\n    const tdNomeMatch = html.match(/class=\"nomeParteEAdvogado\"[^>]*>([\\s\\S]*?)<\\/td>/i);\n    if (tdNomeMatch && tdNomeMatch[1]) {\n      const textoNome = extrairApenasNome(tdNomeMatch[1]);\n      if (textoNome !== 'N/A') {\n        nome = textoNome;\n        console.log('Nome encontrado (estrategia 1 - nomeParteEAdvogado):', nome);\n      }\n    }\n\n    if (nome === 'N/A') {\n      const reqteMatch = html.match(/Reqte[\\s\\S]*?<\\/td>[\\s\\S]*?<td[^>]*>([\\s\\S]*?)<\\/td>/i);\n      if (reqteMatch && reqteMatch[1]) {\n        const textoReqte = extrairApenasNome(reqteMatch[1]);\n        if (textoReqte !== 'N/A') {\n          nome = textoReqte;\n          console.log('Nome encontrado (estrategia 2 - Reqte):', nome);\n        }\n      }\n    }\n\n    if (nome === 'N/A') {\n      const nomeRegex2 = /Reqte[^A-Za-z]*([A-Z][a-zA-Z\\u00C0-\\u00FF]+(?:\\s+[A-Z][a-zA-Z\\u00C0-\\u00FF]+)+)/;\n      const nomeMatch2 = html.match(nomeRegex2);\n      if (nomeMatch2 && nomeMatch2[1]) {\n        const textoNome = limparNome(nomeMatch2[1]);\n        if (textoNome !== 'N/A') {\n          nome = textoNome;\n          console.log('Nome encontrado (estrategia 3 - regex nome):', nome);\n        }\n      }\n    }\n\n    // 5. Ultima data de movimentacao (ultima da lista = mais antiga visivel)\n    const datasMovimentacao = [...html.matchAll(/(\\d{2}\\/\\d{2}\\/\\d{4})/g)].map(m => m[1]);\n    const dataProcesso = datasMovimentacao.length > 0\n      ? datasMovimentacao[datasMovimentacao.length - 1]\n      : dataHora.split(',')[0];\n    console.log('Datas de movimentacao encontradas:', datasMovimentacao);\n    console.log('Data selecionada (ultima):', dataProcesso);\n\n    if (numeroProcesso) {\n      processos.push({\n        numero: numeroProcesso,\n        classe: classeProcesso,\n        data: dataProcesso\n      });\n      console.log('Processo incluido:', numeroProcesso, '-', classeProcesso, '-', dataProcesso);\n    }\n  }\n\n} else {\n  // CASO 1: Lista de processos\n  console.log('Processando lista de processos...');\n\n  const nomeRegex = /<div class=\"unj-base-alt nomeParte\">\\s*([^<]+)/;\n  const nomeMatches = html.match(nomeRegex);\n  if (nomeMatches && nomeMatches[1]) {\n    nome = limparNome(nomeMatches[1]);\n    console.log('Nome encontrado:', nome);\n  }\n\n  const processosRegex = /<li>\\s*<div id=\"divProcesso[^\"]*\"[^>]*>.*?<\\/div>\\s*<\\/li>/gs;\n  const processosMatches = html.match(processosRegex);\n\n  if (processosMatches) {\n    processosMatches.forEach((processoHtml) => {\n      const numRegex = /class=\"linkProcesso\"[^>]*>\\s*([^<\\s]+)/;\n      const numeroMatch = processoHtml.match(numRegex);\n      const numeroProcesso = numeroMatch ? numeroMatch[1].trim() : '';\n\n      const clsRegex = /<div class=\"classeProcesso\">([^<]+)<\\/div>/;\n      const classeMatch = processoHtml.match(clsRegex);\n      const classeProcesso = classeMatch ? classeMatch[1].trim() : '';\n\n      const dtRegex = /<div class=\"dataLocalDistribuicaoProcesso\">([^<]+?)\\s*-/;\n      const dataMatch = processoHtml.match(dtRegex);\n      const dataProcesso = dataMatch ? dataMatch[1].trim() : '';\n\n      const ehRequerente = isRequerente(processoHtml);\n      const ehPrecatorio = isPrecatorio(processoHtml);\n\n      if (!ehRequerente) {\n        console.log('Processo', numeroProcesso, '- EXCLUIDO (Sucessor/Herdeiro)');\n        processosExcluidos++;\n        if (!motivosExclusao.includes('Sucessor/Herdeiro')) motivosExclusao.push('Sucessor/Herdeiro');\n      } else if (!ehPrecatorio) {\n        console.log('Processo', numeroProcesso, '- EXCLUIDO (RPV)');\n        processosExcluidos++;\n        if (!motivosExclusao.includes('RPV')) motivosExclusao.push('RPV');\n      } else if (numeroProcesso && classeProcesso && dataProcesso) {\n        processos.push({\n          numero: numeroProcesso,\n          classe: classeProcesso,\n          data: dataProcesso\n        });\n        console.log('Processo incluido:', numeroProcesso, '-', classeProcesso);\n      }\n    });\n  }\n}\n\nconsole.log('Total de processos (apos filtros):', processos.length);\nconsole.log('Processos excluidos:', processosExcluidos);\nconsole.log('Nome final:', nome);\n\nlet response = '';\n\nif (processos.length === 0) {\n  if (processosExcluidos > 0) {\n    response = 'Consulta no sistema do Tribunal de Justiça do Estado de São Paulo\\n\\nCPF: ' + cpf + '\\n\\n';\n    response += 'Não foram encontrados precatórios onde você figura como requerente.\\n\\n';\n    if (motivosExclusao.includes('RPV') && motivosExclusao.includes('Sucessor/Herdeiro')) {\n      response += 'Os processos encontrados sao RPVs ou você consta como sucessor/herdeiro.';\n    } else if (motivosExclusao.includes('RPV')) {\n      response += 'Os processos encontrados sao Requisições de Pequeno Valor (RPV), não precatórios.';\n    } else if (motivosExclusao.includes('Sucessor/Herdeiro')) {\n      response += 'Nos processos encontrados, voce consta como sucessor/herdeiro, nao como requerente titular.';\n    }\n    response += '\\n\\nDigite menu para voltar ao início.';\n  } else {\n    response = 'Consulta no sistema do Tribunal de Justiça do Estado de São Paulo CPF: ' + cpf + ' - Nenhum processo encontrado, digite menu para voltar ao início';\n  }\n} else {\n  response = 'Consulta no sistema do Tribunal de Justiça do Estado de São Paulo\\n\\nPrezado(a) ' + nome + ', CPF: ' + cpf + ', localizamos os seguintes precatórios:\\n';\n  for (const processo of processos) {\n    const numeroMascarado = mascararNumeroProcesso(processo.numero);\n    response += '- ' + processo.data + ' ' + numeroMascarado + ' ' + processo.classe + '\\n';\n  }\n  response += '\\nConsulta oficial realizada no sistema do Tribunal de Justiça às ' + dataHora;\n  response += '\\n\\n🔍 Podemos enviar um diagnóstico completo do seu precatório com valores atualizados, previsão de pagamento e outras informações. Valor de ~R$ 249,90~ por R$ 99,90 (promoção por tempo limitado).\\n\\nTem interesse em prosseguir?';\n}\n\nreturn [{\n  json: {\n    responseText: response,\n    nome_extraido: nome,\n    processos_array: processos,\n    total_processos: processos.length\n  }\n}];"
+      },
+      "id": "b093757e-a455-4d2c-afe3-dbd37ffce292",
+      "name": "Parse e-SAJ Response",
+      "position": [
+        -1056,
+        -1120
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate 6-digit verification code\nconst code = Math.floor(100000 + Math.random() * 900000).toString();\nconst email = $('Merge State').item.json.message_text;\nconst from = $('Merge State').item.json.from;\n\nconsole.log('Codigo gerado:', code);\nconsole.log('Email:', email);\n\nreturn [{\n  json: {\n    verification_code: code,\n    email: email,\n    from: from,\n    code_generated_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "6860554a-fb1f-46ae-9bf3-1caf1b1d7086",
+      "name": "Generate Verification Code",
+      "position": [
+        -96,
+        -1312
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate verification code\nconst inputCode = $('Merge State').item.json.message_text;\nconst storedCode = $('Merge State').item.json.stored_code;\nconst storedEmail = $('Merge State').item.json.stored_email;\nconst minutesSinceUpdate = $('Merge State').item.json.minutes_since_update || 0;\nconst from = $('Merge State').item.json.from;\n\nconsole.log('Codigo digitado:', inputCode);\nconsole.log('Codigo armazenado:', storedCode);\nconsole.log('Minutos desde update:', minutesSinceUpdate);\n\n// Check if code expired (15 minutes)\nconst isExpired = minutesSinceUpdate > 15;\n\n// Check if code matches\nconst isValid = inputCode === storedCode && !isExpired;\n\nlet response = '';\nlet newState = 'AWAITING_CODE';\nlet triggerPayment = false;\n\nif (isExpired) {\n  response = '⏰ *Código expirou!*\\n\\nO código de verificação expirou. Por favor, digite seu email novamente para receber um novo código.';\n  newState = 'AWAITING_EMAIL';\n} else if (isValid) {\n  response = '✅ *Email verificado com sucesso!*\\n\\n💳 Estamos gerando seu link de pagamento...\\n\\n⏳ Aguarde alguns segundos, você receberá o link aqui no WhatsApp.';\n  newState = 'AWAITING_PAYMENT';\n  triggerPayment = true;\n} else {\n  response = '❌ *Código incorreto!*\\n\\nO código digitado não confere. Por favor, verifique e digite novamente o código de 6 dígitos enviado para seu email.';\n  newState = 'AWAITING_CODE';\n}\n\nreturn [{\n  json: {\n    route: 'CODE',\n    response: response,\n    new_state: newState,\n    code_valid: isValid,\n    code_expired: isExpired,\n    stored_email: storedEmail,\n    trigger_payment: triggerPayment,\n    from: from\n  }\n}];"
+      },
+      "id": "f82bce84-a475-4cd3-9d06-8a3324e7c1d7",
+      "name": "Validate Code",
+      "position": [
+        -96,
+        -1472
+      ],
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "fromEmail": "Revisa Precatório <contato@revisaprecatorio.com.br>",
+        "toEmail": "={{ $json.email }}",
+        "subject": "Código de Verificação - Revisa Precatórios",
+        "html": "=<div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;\">\n  <div style=\"background: linear-gradient(135deg, #1a5f7a 0%, #2d8b9e 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;\">\n    <h1 style=\"color: white; margin: 0; font-size: 24px;\">🏛️ Revisa Precatórios</h1>\n  </div>\n  <div style=\"background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px;\">\n    <h2 style=\"color: #333; margin-top: 0;\">Código de Verificação</h2>\n    <p style=\"color: #666; font-size: 16px;\">Você solicitou um relatório de precatórios. Use o código abaixo para confirmar seu email:</p>\n    <div style=\"background: #1a5f7a; color: white; font-size: 32px; font-weight: bold; letter-spacing: 8px; padding: 20px; text-align: center; border-radius: 8px; margin: 20px 0;\">{{ $json.verification_code }}</div>\n    <p style=\"color: #999; font-size: 14px;\">⏰ Este código expira em 15 minutos.</p>\n    <p style=\"color: #999; font-size: 14px;\">Se você não solicitou este código, ignore este email.</p>\n    <hr style=\"border: none; border-top: 1px solid #ddd; margin: 20px 0;\">\n    <p style=\"color: #999; font-size: 12px; text-align: center;\">© 2024 Revisa Precatórios - Todos os direitos reservados</p>\n  </div>\n</div>",
+        "options": {}
+      },
+      "id": "173689ab-f067-4635-98d7-d728268da610",
+      "name": "Send Verification Email",
+      "position": [
+        352,
+        -864
+      ],
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "webhookId": "14482948-c422-4507-a692-98993971c90e",
+      "credentials": {
+        "smtp": {
+          "id": "QhA560IeJvTVywaS",
+          "name": "SMTP revisa"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "condition1",
+              "leftValue": "={{ $json.query['hub.verify_token'] }}",
+              "operator": {
+                "operation": "equals",
+                "type": "string"
+              },
+              "rightValue": "token"
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          }
+        },
+        "options": {}
+      },
+      "id": "74f981e8-b496-41cc-afd1-41b0ce76fd77",
+      "name": "Check Facebook Verification",
+      "position": [
+        -2304,
+        -944
+      ],
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.query['hub.challenge'] }}",
+        "options": {}
+      },
+      "id": "99092cec-89f3-4bbd-b691-c97b455d89aa",
+      "name": "Facebook Verification Response",
+      "position": [
+        -2112,
+        -1088
+      ],
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "772929385904854",
+        "recipientPhoneNumber": "={{ $('Merge State').item.json.from }}",
+        "textBody": "={{ $json.response }}",
+        "additionalFields": {}
+      },
+      "id": "4aea3c37-789a-4a8c-9c14-2de43b6032c1",
+      "name": "Send WhatsApp Response",
+      "position": [
+        624,
+        -448
+      ],
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "webhookId": "c7ec94c3-96a6-4550-a8b1-60c9e9ecea01",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "ejhZtEKHF0Kh9HeQ",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"ok\"}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "3732b33d-8df9-49e0-a290-57be48602a23",
+      "name": "Respond OK",
+      "position": [
+        800,
+        -448
+      ],
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO consultas_esaj (whatsapp_from, whatsapp_phone_number, cpf, nome_requerente, processos, total_processos, resposta_formatada, current_state, state_updated_at, timestamp_consulta, created_at, updated_at) VALUES ('{{ $('Process Input').item.json.from }}', '{{ $('Process Input').item.json.from }}', '{{ $('Merge State').item.json.message_text }}', '{{ $json.nome_extraido }}', '{{ JSON.stringify({lista: $json.processos_array || []}) }}'::jsonb, {{ $json.total_processos || 0 }}, '{{ $json.responseText.replace(/'/g, \"''\") }}', 'AWAITING_CONFIRMATION', NOW(), NOW(), NOW(), NOW()) ON CONFLICT (whatsapp_from, cpf) DO UPDATE SET nome_requerente = EXCLUDED.nome_requerente, processos = EXCLUDED.processos, total_processos = EXCLUDED.total_processos, resposta_formatada = EXCLUDED.resposta_formatada, current_state = EXCLUDED.current_state, state_updated_at = NOW(), timestamp_consulta = NOW(), updated_at = NOW() RETURNING id, cpf, nome_requerente, total_processos, '{{ $json.responseText.replace(/'/g, \"''\") }}' as responseText, '{{ $json.nome_extraido }}' as nome_extraido, '{{ JSON.stringify($json.processos_array || []) }}' as processos_array_str",
+        "options": {}
+      },
+      "id": "f40114c2-84d8-4ab3-ab15-fe7e7a047394",
+      "name": "Save Consulta",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -864,
+        -1248
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n.srv987902.hstgr.cloud/webhook/generate-payment-link",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"whatsapp_from\": \"{{ $('Process Input').item.json.from }}\",\n  \"email\": \"{{ $json.stored_email || $('Merge State').item.json.stored_email || '' }}\",\n  \"new_state\": \"{{ $json.new_state }}\",\n  \"trigger_payment\": {{ $json.new_state === 'AWAITING_PAYMENT' }}\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "6ec2a446-e72e-4166-b61b-0d4701d4039e",
+      "name": "Trigger Payment Workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        432,
+        -288
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const responseNodes = [\n  'Response MENU', 'Response AGENT', 'Response CONSULTAR',\n  'Response CPF', 'Response EMAIL', 'Response CODE',\n  'Response CONFIRM_YES', 'Response CONFIRM_NO',\n  'Response NOT_TEXT', 'Response INFO_PRECATORIOS'\n];\n\nlet response = '';\n\n// Tenta nós Response primeiro\nfor (const nodeName of responseNodes) {\n  try {\n    const r = $(nodeName).item.json.response;\n    if (r) { response = r; break; }\n  } catch(e) { continue; }\n}\n\n// Tenta Validate Code diretamente\nif (!response) {\n  try {\n    const r = $('Validate Code').item.json.response;\n    if (r) response = r;\n  } catch(e) {}\n}\n\n// Tenta input direto (vem do Update State que preserva response)\nif (!response) {\n  try {\n    const r = $input.first().json.response;\n    if (r) response = r;\n  } catch(e) {}\n}\n\n// Fallback timeout\nif (!response) {\n  try { response = $('Merge State').item.json.timeout_message || ''; } catch(e) {}\n}\n\nif (!response) response = 'Olá! Digite menu para começar.';\n\nconst from = $('Merge State').item.json.from || '';\nconst new_state = $input.first().json.new_state || 'IDLE';\n\nreturn [{ json: { response, from, new_state } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        -448
+      ],
+      "id": "aa489f23-ef04-4080-b45a-ccd20c25f752",
+      "name": "prepare response"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "8ae0a296-0ec6-4b6a-b961-c19bedfed1b8",
+              "leftValue": "={{ $('Consulta e-SAJ').item.json.statusCode }}",
+              "rightValue": 200,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1312,
+        -1056
+      ],
+      "id": "571a0730-bac2-4db0-afa0-8d0394388a7a",
+      "name": "If HTTP 200?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO process_tracking (\n    consulta_id,\n    cpf,\n    whatsapp_phone_number,\n    etapa,\n    evento,\n    retries,\n    concluido,\n    erro,\n    mensagem_erro,\n    detalhes\n)\nVALUES (\n    NULL,\n    '{{ $(\"Process Input\").item.json.message_text || \"00000000000\" }}',\n    '{{ $(\"Process Input\").item.json.from }}',\n    'CONSULTA',\n    'TJSP_INOPERANTE',\n    0,\n    false,\n    true,\n    'Consulta ao TJSP/e-SAJ retornou status HTTP diferente de 200.',\n    jsonb_build_object(\n        'workflow', 'Chatbot Revisa',\n        'node', 'Consulta e-SAJ',\n        'http_status', {{ $json.statusCode || 0 }},\n        'cpf_consultado', '{{ $(\"Process Input\").item.json.message_text || \"\" }}',\n        'whatsapp_origem', '{{ $(\"Process Input\").item.json.from || \"\" }}'\n    )\n);\n\nINSERT INTO logs (cpf, descricao, processo)\nVALUES (\n    '{{ $(\"Process Input\").item.json.message_text }}',\n    '⚠️ TJSP indisponível | WhatsApp: {{ $(\"Process Input\").item.json.from }} | HTTP status: {{ $(\"Consulta e-SAJ\").item.json.statusCode || \"N/D\" }}',\n    'Consulta e-SAJ'\n);",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -1152,
+        -944
+      ],
+      "id": "a6b32266-88d4-46b9-8224-f7630f0b80da",
+      "name": "PT - TJSP Inoperante",
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "fromEmail": "Revisa Precatório <contato@revisaprecatorio.com.br>",
+        "toEmail": "contato@revisaprecatorio.com.br",
+        "subject": "[Revisa] TJSP fora do ar na consulta do chatbot",
+        "html": "=Falha na consulta do TJSP/e-SAJ detectada no chatbot.\n\nWhatsApp do usuário: {{ $(\"Process Input\").item.json.from }}\nCPF consultado: {{ $(\"Process Input\").item.json.message_text }}\nHTTP status: {{ $(\"Consulta e-SAJ\").item.json.statusCode || \"N/D\" }}\n\nAção recomendada:\n- Verificar indisponibilidade do TJSP\n- Acompanhar novas tentativas dos usuários",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -992,
+        -944
+      ],
+      "id": "55b0dbd5-ba53-4682-963f-71e729a7c84b",
+      "name": "Email Alerta TJSP",
+      "webhookId": "756e9800-c4b6-4cdc-ac4c-46fa22a9b561",
+      "credentials": {
+        "smtp": {
+          "id": "QhA560IeJvTVywaS",
+          "name": "SMTP revisa"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "772929385904854",
+        "recipientPhoneNumber": "5511922229150",
+        "textBody": "=⚠️ Alerta Revisa: TJSP indisponível  WhatsApp usuário: {{ $(\"Process Input\").item.json.from }} CPF consultado: {{ $(\"Process Input\").item.json.message_text }} HTTP status: {{ $(\"Consulta e-SAJ\").item.json.statusCode || \"N/D\" }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        -832,
+        -944
+      ],
+      "id": "24d519be-8b7c-4cb4-b97b-6b2baa67e5b3",
+      "name": "WA Alerta Operacao TJSP",
+      "webhookId": "14634727-b55a-4c9b-bfd1-5a09c0bb6a1f",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "ejhZtEKHF0Kh9HeQ",
+          "name": "WhatsApp account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "772929385904854",
+        "recipientPhoneNumber": "={{ $(\"Process Input\").item.json.from }}",
+        "textBody": "No momento, o sistema do Tribunal de Justiça de São Paulo está fora do ar ou indisponível. Por favor, tente novamente mais tarde.  Digite *menu* para voltar ao início.",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        -672,
+        -944
+      ],
+      "id": "76dd6ae7-ae7d-4159-8216-8d3ee301f299",
+      "name": "Send TJSP Out",
+      "webhookId": "e5280626-d0e8-4bd7-b7cb-1b6b84869422",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "ejhZtEKHF0Kh9HeQ",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO process_tracking (\n    consulta_id,\n    cpf,\n    whatsapp_phone_number,\n    etapa,\n    evento,\n    retries,\n    concluido,\n    erro,\n    detalhes\n)\nVALUES (\n    NULL,\n    '{{ $(\"Process Input\").item.json.message_text }}',\n    '{{ $(\"Process Input\").item.json.from }}',\n    'CONSULTA',\n    'CONSULTA_SOLICITADA',\n    0,\n    false,\n    false,\n    jsonb_build_object(\n        'workflow', 'Chatbot Revisa',\n        'node', 'Consulta e-SAJ',\n        'cpf_informado', '{{ $(\"Process Input\").item.json.message_text }}',\n        'http_status', {{ $json.statusCode || 0 }}\n    )\n);",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -1488,
+        -1056
+      ],
+      "id": "7904756c-eb48-4725-b3a0-5a50ede71f8a",
+      "name": "PT - Consulta Solicitada",
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO process_tracking (\n    consulta_id,\n    cpf,\n    whatsapp_phone_number,\n    etapa,\n    evento,\n    retries,\n    concluido,\n    erro,\n    detalhes\n)\nVALUES (\n    {{ $('Save Consulta').item.json.id || 'NULL' }},\n    '{{ $(\"Process Input\").item.json.message_text }}',\n    '{{ $(\"Process Input\").item.json.from }}',\n    'CONSULTA',\n    'CONSULTA_REALIZADA',\n    0,\n    {{ $('Save Consulta').item.json.total_processos > 0 ? 'true' : 'false' }},\n    false,\n    jsonb_build_object(\n        'workflow', 'Chatbot Revisa',\n        'node', 'Save Consulta',\n        'total_processos', {{ $('Save Consulta').item.json.total_processos || 0 }},\n        'nome_extraido', '{{ $(\"Save Consulta\").item.json.nome_extraido || \"N/A\" }}'\n    )\n);",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -656,
+        -1248
+      ],
+      "id": "5603d18c-49b8-40bb-9453-ee5b62aef0a3",
+      "name": "Consulta Realizada",
+      "credentials": {
+        "postgres": {
+          "id": "b0F0gRzrpEq6BR3M",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Check Facebook Verification": {
+      "main": [
+        [
+          {
+            "node": "Facebook Verification Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consulta e-SAJ": {
+      "main": [
+        [
+          {
+            "node": "PT - Consulta Solicitada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Verification Code": {
+      "main": [
+        [
+          {
+            "node": "Send Verification Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get User State": {
+      "main": [
+        [
+          {
+            "node": "Merge State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge State": {
+      "main": [
+        [
+          {
+            "node": "Route Message Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse e-SAJ Response": {
+      "main": [
+        [
+          {
+            "node": "Save Consulta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Input": {
+      "main": [
+        [
+          {
+            "node": "Get User State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response AGENT": {
+      "main": [
+        [
+          {
+            "node": "Update State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response CODE": {
+      "main": [
+        [
+          {
+            "node": "Update State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response CONFIRM_NO": {
+      "main": [
+        [
+          {
+            "node": "Update State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response CONFIRM_YES": {
+      "main": [
+        [
+          {
+            "node": "Update State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response CONSULTAR": {
+      "main": [
+        [
+          {
+            "node": "Update State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response CPF": {
+      "main": [
+        [
+          {
+            "node": "Update State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response EMAIL": {
+      "main": [
+        [
+          {
+            "node": "Update State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response INFO_PRECATORIOS": {
+      "main": [
+        [
+          {
+            "node": "Update State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response MENU": {
+      "main": [
+        [
+          {
+            "node": "Update State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response NOT_TEXT": {
+      "main": [
+        [
+          {
+            "node": "Update State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Message Type": {
+      "main": [
+        [
+          {
+            "node": "Response NOT_TEXT",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Consulta e-SAJ",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Verification Code",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Validate Code",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response CONFIRM_YES",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response CONFIRM_NO",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response MENU",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response INFO_PRECATORIOS",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response CONSULTAR",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response AGENT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Verification Email": {
+      "main": [
+        [
+          {
+            "node": "Response EMAIL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send WhatsApp Response": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update State": {
+      "main": [
+        [
+          {
+            "node": "Trigger Payment Workflow",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "prepare response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Process Input",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check Facebook Verification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Consulta": {
+      "main": [
+        [
+          {
+            "node": "Consulta Realizada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Code": {
+      "main": [
+        [
+          {
+            "node": "Update State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "prepare response": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If HTTP 200?": {
+      "main": [
+        [
+          {
+            "node": "Parse e-SAJ Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "PT - TJSP Inoperante",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PT - TJSP Inoperante": {
+      "main": [
+        [
+          {
+            "node": "Email Alerta TJSP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Alerta TJSP": {
+      "main": [
+        [
+          {
+            "node": "WA Alerta Operacao TJSP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WA Alerta Operacao TJSP": {
+      "main": [
+        [
+          {
+            "node": "Send TJSP Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PT - Consulta Solicitada": {
+      "main": [
+        [
+          {
+            "node": "If HTTP 200?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consulta Realizada": {
+      "main": [
+        [
+          {
+            "node": "Response CPF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "a1073520-8558-478c-b1a7-e4f2140471cf",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "987849d7ed7aff758690b6a5c22582879580ea3a6254650b3e67b60c78c6eed3"
+  },
+  "id": "73xnqygBK9tk6aDK",
+  "tags": [
+    {
+      "updatedAt": "2026-03-10T01:04:45.220Z",
+      "createdAt": "2026-03-10T01:04:45.220Z",
+      "id": "BPdPZc6AqvCdeelu",
+      "name": "chatbot"
+    }
+  ]
+}
