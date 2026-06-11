@@ -61,9 +61,23 @@ flowchart TD
     NOTIF([WA + Email\ncliente + equipe])
     SCHED --> AG --> NOTIF
 
-    style WA fill:#238636,color:#fff
-    style EMAIL fill:#1f6feb,color:#fff
-    style PARCIAL fill:#d29922,color:#000
+    classDef entrada  fill:#238636,color:#fff,stroke:#2ea043
+    classDef workflow fill:#1f6feb,color:#fff,stroke:#388bfd
+    classDef infra    fill:#6639ba,color:#fff,stroke:#8957e5
+    classDef banco    fill:#0d419d,color:#fff,stroke:#1f6feb
+    classDef sucesso  fill:#1f6feb,color:#fff,stroke:#388bfd
+    classDef parcial  fill:#d29922,color:#000,stroke:#e3b341
+    classDef alerta   fill:#da3633,color:#fff,stroke:#f85149
+    classDef cinza    fill:#57606a,color:#fff,stroke:#6e7781
+
+    class WA,ADMIN,SCHED entrada
+    class CW,MP,LE workflow
+    class CR,OCR infra
+    class DB banco
+    class EMAIL sucesso
+    class PARCIAL parcial
+    class AG alerta
+    class BP,NOTIF cinza
 ```
 
 ---
