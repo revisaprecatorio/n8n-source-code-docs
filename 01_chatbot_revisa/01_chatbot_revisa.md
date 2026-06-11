@@ -180,7 +180,7 @@ sequenceDiagram
 ## Máquina de Estados
 
 ```mermaid
-%%{init: {'theme': 'dark'}}%%
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#1f6feb', 'primaryTextColor': '#ffffff', 'primaryBorderColor': '#388bfd', 'lineColor': '#8b949e', 'background': '#0d1117', 'secondaryColor': '#21262d', 'tertiaryColor': '#161b22', 'labelColor': '#c9d1d9'}}}%%
 stateDiagram-v2
     [*] --> IDLE : sem registro
 
